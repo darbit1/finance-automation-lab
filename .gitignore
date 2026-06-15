@@ -1,0 +1,24 @@
+# --- Secrets: NEVER commit ---
+**/.env
+*.env
+netsuite-mcp/.env
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Node ---
+node_modules/
+netsuite-mcp/dist/
+
+# --- Pipeline outputs (may contain real data) ---
+out/
+*.report.md
+synthetic_tb.csv
+
+# --- Editor / OS / local config ---
+.vscode/
+.DS_Store
+.claude/settings.local.json
