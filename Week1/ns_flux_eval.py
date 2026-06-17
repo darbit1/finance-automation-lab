@@ -52,10 +52,12 @@ def allowed_numbers(fact, drivers) -> set:
     """Every number the narrative may legitimately contain."""
     f = fact.to_dict() if hasattr(fact, "to_dict") else dict(fact)
     vals = set()
-    for k in ("prior", "current", "variance_abs"):
-        if f.get(k) is not None:
-            vals.add(round(float(f[k]), 2))
-            vals.add(round(abs(float(f[k])), 2))
+    # Accept either the engine's keys (prior/current) or the report's (prior_amt/current_amt).
+    for keys in (("prior", "prior_amt"), ("current", "current_amt"), ("variance_abs",)):
+        v = next((f[k] for k in keys if f.get(k) is not None), None)
+        if v is not None:
+            vals.add(round(float(v), 2))
+            vals.add(round(abs(float(v)), 2))
     if f.get("variance_pct") is not None:
         vals.add(round(float(f["variance_pct"]), 4))
         vals.add(round(abs(float(f["variance_pct"])), 4))
