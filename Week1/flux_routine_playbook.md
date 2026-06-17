@@ -6,10 +6,15 @@ a deterministic eval guards every explanation before anything is drafted. **AI d
 checks, human approves.**
 
 ## Run config (set in the Routine, not committed)
-- `<SUBSIDIARY>` — the entity to review (e.g. the HQ entity).
-- `<ABS_THRESHOLD>` / `<PCT_THRESHOLD>` — tolerance gate. Default `25000` / `0.10`.
+- `<SAVED_SEARCH_ID>` — the trial-balance saved search to run (returns Classification, Account Type,
+  Account = internal id, Month - 1 = current, Month - 2 = prior, Formula = difference). It is the
+  single source of the calc; it is consolidated and reports on one accounting book.
+- `<ACCOUNTING_BOOK>` — the book the saved search reports on. Default `1` (primary). Driver pulls
+  MUST use the same book or the variance is over-stated (transactionaccountingline has one row per
+  book).
+- `<ABS_THRESHOLD>` / `<PCT_THRESHOLD>` — tolerance gate. Default `25000` / `0.10`. (The saved
+  search returns the difference but NO tolerance flag, so the gate is applied in code.)
 - `<FINANCE_LIST>` — Gmail draft recipient. **Draft only; never send.**
-- Account scope: P&L (`Income, COGS, Expense, OthIncome, OthExpense`). Drop for full TB.
 - Model: use an economical model (Haiku-class) for the explanation step — it is extract-and-
   summarise over a tiny pre-aggregated table, not reasoning-heavy. (Documented per CLAUDE.md.)
 
@@ -18,16 +23,24 @@ Monthly, a few working days into the new month (after close). **Current = the ju
 Prior = the month before.** Resolve names → IDs with `ns_flux_sql.period_lookup_sql(...)`.
 
 ## Steps (each run)
-1. **Resolve periods.** From the run date, derive current/prior month names; look up their internal
-   IDs (`period_lookup_sql`). Abort with a clear message if either is missing.
-2. **Run the flux.** Prefer the saved search via `ns_runSavedSearch` (once it exists). Until then,
-   run `ns_runCustomSuiteQL(ns_flux_sql.flux_sql(<SUBSIDIARY>, curr_id, prior_id, <ABS>, <PCT>))`.
-   Both return identical rows (current, prior, variance, %, direction, within_tolerance).
-3. **Filter.** Keep rows where `within_tolerance = 'REVIEW'`. Record the count of `OK` rows.
-   If zero REVIEW rows → assemble a one-line "all within tolerance" report, draft it (step 8), stop.
-4. **Pull drivers.** For the REVIEW account numbers, run
-   `ns_runCustomSuiteQL(ns_flux_sql.drivers_sql(<SUBSIDIARY>, [curr_id, prior_id], acctnumbers))`.
-   This is the ONLY transaction context the AI sees (pre-aggregated by period/type/vendor).
+1. **Resolve periods.** From the run date, current = the just-closed month (month before the run
+   month), prior = the month before that. Resolve both names to internal IDs with
+   `ns_flux_sql.period_lookup_sql(current_name, prior_name)` via the NetSuite SuiteQL tool. Abort
+   (FAILURE) if either is missing.
+2. **Run the saved search.** `ns_runSavedSearch(searchId=<SAVED_SEARCH_ID>)`, paging with
+   `range_start`/`range_end` (e.g. 0-50, 50-250, ...) until it returns an empty page. Each row has:
+   `Classification`, `Account Type`, `Account` (= account **internal id**), `Month - 1` (current),
+   `Month - 2` (prior), `Formula (Numeric)` (= difference). It is consolidated, single book.
+3. **Apply the tolerance gate (in code — the search has no flag).** For each row: prior = Month-2,
+   current = Month-1, variance = current − prior, pct = None if prior == 0 else variance/abs(prior).
+   Flag **REVIEW** if `abs(variance) >= <ABS_THRESHOLD>` AND (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`).
+   Record the count of within-tolerance rows. If zero REVIEW → assemble a one-line "all within
+   tolerance" report, draft it (step 8), stop.
+4. **Pull drivers.** For the REVIEW account internal ids, run
+   `ns_flux_sql.drivers_by_id_sql(account_ids, [curr_id, prior_id], <ACCOUNTING_BOOK>)` via the
+   NetSuite SuiteQL tool. **Same book as the saved search** (else the variance is over-stated). This
+   pre-aggregated table (by period / subsidiary / type / vendor, with `tranid`) is the ONLY
+   transaction context the AI sees. Flag any test/one-off `tranid` as a reviewer note.
 5. **Explain (AI).** For each REVIEW account, write ONE plain-language paragraph using **only**:
    the account's facts (prior, current, variance, %) and its driver rows. Rules:
    - Use only numbers present in those facts/drivers. Introduce no other figure.

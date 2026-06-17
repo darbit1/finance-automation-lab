@@ -36,11 +36,15 @@ def period_lookup_sql(*period_names: str) -> str:
 
 def flux_sql(subsidiary: str, curr_id: int, prior_id: int,
              abs_threshold: float, pct_threshold: float,
-             accttypes: Sequence[str] = PL_TYPES) -> str:
+             accttypes: Sequence[str] = PL_TYPES, accounting_book: int = 1) -> str:
     """
     Per-account current/prior/variance/% + direction + within_tolerance flag.
     Identical logic to the saved-search formulas; use it to validate the saved search and as
     the pipeline's calc source until the saved search exists.
+
+    accounting_book defaults to 1 (primary). transactionaccountingline holds one row per book,
+    so WITHOUT this filter a multi-book account is summed across books and the variance is
+    over-stated. Always pin the book the saved search reports on.
     """
     return f"""
 SELECT
@@ -67,6 +71,7 @@ FROM (
   JOIN account a ON a.id = tal.account
   JOIN subsidiary s ON s.id = t.subsidiary
   WHERE t.posting = 'T'
+    AND tal.accountingbook = {accounting_book}
     AND s.name = '{_q(subsidiary)}'
     AND t.postingperiod IN ({curr_id}, {prior_id})
     AND a.accttype IN ({_types_csv(accttypes)})
@@ -76,27 +81,52 @@ ORDER BY ABS(x.current_amt - x.prior_amt) DESC
 """.strip()
 
 
-def drivers_sql(subsidiary: str, period_ids: Sequence[int], acctnumbers: Sequence[str]) -> str:
+def drivers_sql(subsidiary: str, period_ids: Sequence[int], acctnumbers: Sequence[str],
+                accounting_book: int = 1) -> str:
     """
     Pre-aggregated drivers behind the flagged accounts, for BOTH periods, grouped by
     period / transaction type / vendor, ranked by size. This compact table is the ONLY
-    transaction context the AI sees (right-sized: not raw lines).
+    transaction context the AI sees (right-sized: not raw lines). Single book by default.
     """
     accts = ", ".join(f"'{_q(a)}'" for a in acctnumbers)
     return f"""
 SELECT a.acctnumber, a.fullname AS account, t.postingperiod AS period_id,
-       t.type AS txn_type, BUILTIN.DF(t.entity) AS entity,
+       t.type AS txn_type, t.tranid, BUILTIN.DF(t.entity) AS entity,
        COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount
 FROM transactionaccountingline tal
 JOIN transaction t ON t.id = tal.transaction
 JOIN account a ON a.id = tal.account
 JOIN subsidiary s ON s.id = t.subsidiary
 WHERE t.posting = 'T'
+  AND tal.accountingbook = {accounting_book}
   AND s.name = '{_q(subsidiary)}'
   AND t.postingperiod IN ({_csv(period_ids)})
   AND a.acctnumber IN ({accts})
-GROUP BY a.acctnumber, a.fullname, t.postingperiod, t.type, BUILTIN.DF(t.entity)
+GROUP BY a.acctnumber, a.fullname, t.postingperiod, t.type, t.tranid, BUILTIN.DF(t.entity)
 ORDER BY a.acctnumber, t.postingperiod, ABS(SUM(tal.amount)) DESC
+""".strip()
+
+
+def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
+                      accounting_book: int = 1) -> str:
+    """
+    Drivers for the saved-search flow, where the search returns account INTERNAL IDs and is
+    CONSOLIDATED (no subsidiary filter). Same pre-aggregation as drivers_sql, single book.
+    Includes tranid so a reviewer / the AI can spot test or one-off postings.
+    """
+    return f"""
+SELECT a.id, a.fullname AS account, t.postingperiod AS period_id,
+       BUILTIN.DF(t.subsidiary) AS subsidiary, t.type AS txn_type, t.tranid,
+       BUILTIN.DF(t.entity) AS entity, COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount
+FROM transactionaccountingline tal
+JOIN transaction t ON t.id = tal.transaction
+JOIN account a ON a.id = tal.account
+WHERE t.posting = 'T'
+  AND tal.accountingbook = {accounting_book}
+  AND tal.account IN ({_csv(account_ids)})
+  AND t.postingperiod IN ({_csv(period_ids)})
+GROUP BY a.id, a.fullname, t.postingperiod, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity)
+ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC
 """.strip()
 
 
