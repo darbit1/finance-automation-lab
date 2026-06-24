@@ -33,7 +33,7 @@ Set on the Routine, not committed here:
 
 | Setting | Meaning | Default |
 |---------|---------|---------|
-| `<SAVED_SEARCH_ID>` | the trial-balance saved search to run. Returns `Classification`, `Account Type`, `Account` (= account **internal id**), `Month - 1` (current), `Month - 2` (prior), `Formula (Numeric)` (= difference). Consolidated, single book. | — |
+| `<SAVED_SEARCH_ID>` | the trial-balance saved search. Grouped **per (subsidiary, account)** and pre-filtered to non-zero movements. Columns: `Subsidiary`, `Subsidiary Internal ID`, `Classification`, `Account Type`, `Account`, `Account Internal ID`, `Month - 1` (current), `Month - 2` (prior), `Difference`. Single book. | — |
 | `<ACCOUNTING_BOOK>` | the book the saved search reports on. Driver pulls MUST use the same book, or the variance is over-stated (`transactionaccountingline` has one row per book). | `1` (primary) |
 | `<ABS_THRESHOLD>` / `<PCT_THRESHOLD>` | the tolerance gate. The saved search returns the difference but no flag, so the gate is applied in code. | `25000` / `0.10` |
 | `<RECIPIENT>` | the Gmail draft recipient. **Draft only; never send.** | — |
@@ -48,7 +48,7 @@ the model only writes the narratives.
 
 | Script | Role | Functions the routine calls |
 |--------|------|-----------------------------|
-| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes | `period_lookup_sql()` · `drivers_by_id_sql()` · `flux_sql(review_only=)` (SuiteQL fallback when not using the saved search) |
+| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes | `period_lookup_sql()` · `drivers_by_id_sql(account_ids, period_ids, book, subsidiary_ids=)` (single-book, scoped to the flagged entities, emits `subsidiary_id`) · `flux_sql(review_only=)` (SuiteQL fallback) |
 | `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers)` |
 | `ns_flux_report.py` | assembles the report + email **in code** (no hand-written HTML) | `build_email(meta, review_rows, ok_count, notes)` → `{subject, body, html}` |
 
@@ -75,10 +75,10 @@ Worked example: a run on **5 Jul 2026** → current = **Jun 2026**, prior = **Ma
 | 0 | Trigger | platform cron | — | `0 6 5 * *` fires; agent clones the repo, attaches NetSuite + Gmail |
 | 1a | Build period query | **Bash** | `ns_flux_sql.period_lookup_sql('Jun 2026','May 2026')` | names → a SuiteQL string |
 | 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → `curr_id`, `prior_id` |
-| 2 | The calc | **NetSuite** `ns_runSavedSearch(<SAVED_SEARCH_ID>)`, paged | — (the saved search *is* the calc) | → trial-balance rows |
-| 3 | Tolerance filter | **Bash** | inline Python gate | drop flat rows; flag REVIEW; → REVIEW list + `ok_count` |
-| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr_id,prior_id],<BOOK>)` | flagged ids → a SuiteQL string |
-| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → driver rows: subsidiary, type, **tranid**, vendor, lines, amount |
+| 2 | The calc | **NetSuite** `ns_runSavedSearch(<SAVED_SEARCH_ID>)`, paged | — (the saved search *is* the calc) | → rows **per (subsidiary, account)**, already non-zero, with Subsidiary/Account Internal IDs + `Difference` |
+| 3 | Tolerance filter | **Bash** | inline Python gate | apply `abs ≥ <ABS> AND (new OR pct ≥ <PCT>)`; → REVIEW list (each with subsidiary id + account id) + `ok_count` |
+| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr,prior],<BOOK>,subsidiary_ids=[sub_ids])` | flagged ids → a SuiteQL string |
+| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → driver rows with **subsidiary_id**; the caller matches each to its row by (subsidiary_id, account_id) |
 | 5 | Explain | **AI — the only AI step** | — | per account: one narrative from its facts + drivers only |
 | 6 | Verify | **Bash** | `ns_flux_eval.check_explanation(narrative, fact, drivers)` | → `(ok, bad_numbers, bad_entities)`; set `eval_ok` |
 | 7 | Assemble | **Bash** | `ns_flux_report.build_email(meta, review_rows, ok_count, notes)` | → `{subject, body, html}`; write `body` to `out/flux_<period>.md` |

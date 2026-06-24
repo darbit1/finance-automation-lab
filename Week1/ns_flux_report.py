@@ -48,18 +48,24 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
     L.append(f"**{flagged} account(s) outside tolerance**, {ok_count} within tolerance. "
              f"Narratives passing the number/provenance check: {verified}/{flagged}.")
     L.append("")
-    L.append("| Account | Prior | Current | Variance | % | Direction |")
-    L.append("|---|--:|--:|--:|--:|:--|")
+    show_sub = any(r.get("subsidiary") for r in review_rows)
+    cols = (["Subsidiary"] if show_sub else []) + ["Account", "Prior", "Current", "Variance", "%", "Direction"]
+    aligns = (["---"] if show_sub else []) + ["---", "--:", "--:", "--:", "--:", ":--"]
+    L.append("| " + " | ".join(cols) + " |")
+    L.append("|" + "|".join(aligns) + "|")
     for r in review_rows:
-        L.append(f"| {r['account']} | {_money(r['prior_amt'], ccy)} | {_money(r['current_amt'], ccy)} "
-                 f"| {_money(r['variance_abs'], ccy)} | {_pct(r['variance_pct'])} | {r['direction']} |")
+        cells = ([r.get("subsidiary", "")] if show_sub else []) + [
+            r["account"], _money(r["prior_amt"], ccy), _money(r["current_amt"], ccy),
+            _money(r["variance_abs"], ccy), _pct(r["variance_pct"]), r["direction"]]
+        L.append("| " + " | ".join(str(c) for c in cells) + " |")
     L.append("")
     L.append("## Explanations")
     L.append("*AI drafted from the underlying transactions; every figure and vendor below was "
              "checked deterministically against the source data before this report was produced.*")
     L.append("")
     for r in review_rows:
-        L.append(f"### {r['account']}")
+        head = f"{r['subsidiary']} - {r['account']}" if (show_sub and r.get("subsidiary")) else r["account"]
+        L.append(f"### {head}")
         if r.get("eval_ok"):
             L.append(r["narrative"])
         else:
@@ -99,14 +105,17 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
     H.append(f'<p style="font-size:14px;margin:0 0 14px"><strong>{flagged} account(s) outside tolerance</strong>, '
              f'{ok_count} within tolerance. Narratives passing the number/provenance check: '
              f'<strong>{verified}/{flagged}</strong>.</p>')
+    show_sub = any(r.get("subsidiary") for r in review_rows)
+    sub_th = f'<th style="text-align:left;{cell}">Subsidiary</th>' if show_sub else ''
     H.append('<table style="border-collapse:collapse;font-size:13px;width:100%"><thead>'
              '<tr style="background:#f3f4f6">'
-             f'<th style="text-align:left;{cell}">Account</th><th style="{rcell}">Prior</th>'
+             f'{sub_th}<th style="text-align:left;{cell}">Account</th><th style="{rcell}">Prior</th>'
              f'<th style="{rcell}">Current</th><th style="{rcell}">Variance</th>'
              f'<th style="{rcell}">%</th><th style="text-align:left;{cell}">Direction</th></tr></thead><tbody>')
     for i, r in enumerate(review_rows):
         bg = ' style="background:#fafafa"' if i % 2 else ''
-        H.append(f'<tr{bg}><td style="{cell}">{e(str(r["account"]))}</td>'
+        sub_td = f'<td style="{cell}">{e(str(r.get("subsidiary", "")))}</td>' if show_sub else ''
+        H.append(f'<tr{bg}>{sub_td}<td style="{cell}">{e(str(r["account"]))}</td>'
                  f'<td style="{rcell}">{_money(r["prior_amt"], ccy)}</td>'
                  f'<td style="{rcell}">{_money(r["current_amt"], ccy)}</td>'
                  f'<td style="{rcell}">{_money(r["variance_abs"], ccy)}</td>'
@@ -118,12 +127,13 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
              'underlying transactions; every figure and vendor below was checked deterministically against '
              'the source data before this report was produced.</p>')
     for r in review_rows:
+        label = f'{r["subsidiary"]} - {r["account"]}' if (show_sub and r.get("subsidiary")) else r["account"]
         if r.get("eval_ok"):
-            H.append(f'<p style="font-size:13px;margin:0 0 10px"><strong>{e(str(r["account"]))}.</strong> '
+            H.append(f'<p style="font-size:13px;margin:0 0 10px"><strong>{e(str(label))}.</strong> '
                      f'{e(str(r["narrative"]))}</p>')
         else:
             H.append(f'<p style="font-size:13px;background:#fef2f2;border:1px solid #fecaca;padding:8px 10px;'
-                     f'border-radius:4px;margin:6px 0 10px"><strong>{e(str(r["account"]))} - withheld, failed '
+                     f'border-radius:4px;margin:6px 0 10px"><strong>{e(str(label))} - withheld, failed '
                      f'verification.</strong> The drafted explanation contained a figure or vendor not traceable '
                      f'to source and was not shipped. Variance: {_money(r["variance_abs"], ccy)} '
                      f'({_pct(r["variance_pct"])}). Manual review required.</p>')

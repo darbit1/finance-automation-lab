@@ -119,24 +119,31 @@ ORDER BY a.acctnumber, t.postingperiod, ABS(SUM(tal.amount)) DESC
 
 
 def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
-                      accounting_book: int = 1) -> str:
+                      accounting_book: int = 1, subsidiary_ids: Sequence[int] = None) -> str:
     """
-    Drivers for the saved-search flow, where the search returns account INTERNAL IDs and is
-    CONSOLIDATED (no subsidiary filter). Same pre-aggregation as drivers_sql, single book.
-    Includes tranid so a reviewer / the AI can spot test or one-off postings.
+    Drivers for the saved-search flow, where the search returns account INTERNAL IDs and groups
+    per (subsidiary, account). Single book. Includes tranid so a reviewer / the AI can spot test or
+    one-off postings, and emits subsidiary_id so the caller can match each driver row back to a
+    flagged (subsidiary, account) row.
+
+    Pass subsidiary_ids (the flagged rows' Subsidiary Internal IDs) to scope the pull to those
+    entities. The account_ids x subsidiary_ids IN-lists may over-pull cross pairs; the caller drops
+    the extras by matching on (subsidiary_id, account_id).
     """
+    sub_filter = f"\n  AND t.subsidiary IN ({_csv(subsidiary_ids)})" if subsidiary_ids else ""
     return f"""
 SELECT a.id, a.fullname AS account, t.postingperiod AS period_id,
-       BUILTIN.DF(t.subsidiary) AS subsidiary, t.type AS txn_type, t.tranid,
-       BUILTIN.DF(t.entity) AS entity, COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount
+       t.subsidiary AS subsidiary_id, BUILTIN.DF(t.subsidiary) AS subsidiary,
+       t.type AS txn_type, t.tranid, BUILTIN.DF(t.entity) AS entity,
+       COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount
 FROM transactionaccountingline tal
 JOIN transaction t ON t.id = tal.transaction
 JOIN account a ON a.id = tal.account
 WHERE t.posting = 'T'
   AND tal.accountingbook = {accounting_book}
   AND tal.account IN ({_csv(account_ids)})
-  AND t.postingperiod IN ({_csv(period_ids)})
-GROUP BY a.id, a.fullname, t.postingperiod, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity)
+  AND t.postingperiod IN ({_csv(period_ids)}){sub_filter}
+GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity)
 ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC
 """.strip()
 
