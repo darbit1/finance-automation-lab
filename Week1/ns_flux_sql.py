@@ -36,7 +36,8 @@ def period_lookup_sql(*period_names: str) -> str:
 
 def flux_sql(subsidiary: str, curr_id: int, prior_id: int,
              abs_threshold: float, pct_threshold: float,
-             accttypes: Sequence[str] = PL_TYPES, accounting_book: int = 1) -> str:
+             accttypes: Sequence[str] = PL_TYPES, accounting_book: int = 1,
+             review_only: bool = False) -> str:
     """
     Per-account current/prior/variance/% + direction + within_tolerance flag.
     Identical logic to the saved-search formulas; use it to validate the saved search and as
@@ -45,39 +46,49 @@ def flux_sql(subsidiary: str, curr_id: int, prior_id: int,
     accounting_book defaults to 1 (primary). transactionaccountingline holds one row per book,
     so WITHOUT this filter a multi-book account is summed across books and the variance is
     over-stated. Always pin the book the saved search reports on.
+
+    review_only=True filters server-side to the flagged rows only. Prefer this for any run that
+    feeds the AI/report: a trial balance is mostly flat, so returning only REVIEW rows turns a
+    few-hundred-row result into a handful and is the single biggest token saver.
     """
+    review_filter = "WHERE f.within_tolerance = 'REVIEW'" if review_only else ""
     return f"""
-SELECT
-  x.account, x.accttype,
-  ROUND(x.current_amt,2) AS current_amt,
-  ROUND(x.prior_amt,2)   AS prior_amt,
-  ROUND(x.current_amt - x.prior_amt,2) AS variance_abs,
-  CASE WHEN x.prior_amt = 0 THEN NULL
-       ELSE ROUND((x.current_amt - x.prior_amt)/ABS(x.prior_amt),4) END AS variance_pct,
-  CASE WHEN x.prior_amt = 0 AND x.current_amt <> 0 THEN 'new'
-       WHEN x.current_amt = 0 AND x.prior_amt <> 0 THEN 'cleared'
-       WHEN x.current_amt - x.prior_amt > 0 THEN 'increase'
-       WHEN x.current_amt - x.prior_amt < 0 THEN 'decrease'
-       ELSE 'flat' END AS direction,
-  CASE WHEN ABS(x.current_amt - x.prior_amt) >= {abs_threshold}
-            AND (x.prior_amt = 0 OR ABS((x.current_amt - x.prior_amt)/ABS(x.prior_amt)) >= {pct_threshold})
-       THEN 'REVIEW' ELSE 'OK' END AS within_tolerance
+SELECT f.account, f.accttype, f.current_amt, f.prior_amt, f.variance_abs,
+       f.variance_pct, f.direction, f.within_tolerance
 FROM (
-  SELECT a.acctnumber, a.fullname AS account, a.accttype,
-    NVL(SUM(CASE WHEN t.postingperiod = {curr_id}  THEN tal.amount END),0) AS current_amt,
-    NVL(SUM(CASE WHEN t.postingperiod = {prior_id} THEN tal.amount END),0) AS prior_amt
-  FROM transactionaccountingline tal
-  JOIN transaction t ON t.id = tal.transaction
-  JOIN account a ON a.id = tal.account
-  JOIN subsidiary s ON s.id = t.subsidiary
-  WHERE t.posting = 'T'
-    AND tal.accountingbook = {accounting_book}
-    AND s.name = '{_q(subsidiary)}'
-    AND t.postingperiod IN ({curr_id}, {prior_id})
-    AND a.accttype IN ({_types_csv(accttypes)})
-  GROUP BY a.acctnumber, a.fullname, a.accttype
-) x
-ORDER BY ABS(x.current_amt - x.prior_amt) DESC
+  SELECT
+    x.account, x.accttype,
+    ROUND(x.current_amt,2) AS current_amt,
+    ROUND(x.prior_amt,2)   AS prior_amt,
+    ROUND(x.current_amt - x.prior_amt,2) AS variance_abs,
+    CASE WHEN x.prior_amt = 0 THEN NULL
+         ELSE ROUND((x.current_amt - x.prior_amt)/ABS(x.prior_amt),4) END AS variance_pct,
+    CASE WHEN x.prior_amt = 0 AND x.current_amt <> 0 THEN 'new'
+         WHEN x.current_amt = 0 AND x.prior_amt <> 0 THEN 'cleared'
+         WHEN x.current_amt - x.prior_amt > 0 THEN 'increase'
+         WHEN x.current_amt - x.prior_amt < 0 THEN 'decrease'
+         ELSE 'flat' END AS direction,
+    CASE WHEN ABS(x.current_amt - x.prior_amt) >= {abs_threshold}
+              AND (x.prior_amt = 0 OR ABS((x.current_amt - x.prior_amt)/ABS(x.prior_amt)) >= {pct_threshold})
+         THEN 'REVIEW' ELSE 'OK' END AS within_tolerance
+  FROM (
+    SELECT a.acctnumber, a.fullname AS account, a.accttype,
+      NVL(SUM(CASE WHEN t.postingperiod = {curr_id}  THEN tal.amount END),0) AS current_amt,
+      NVL(SUM(CASE WHEN t.postingperiod = {prior_id} THEN tal.amount END),0) AS prior_amt
+    FROM transactionaccountingline tal
+    JOIN transaction t ON t.id = tal.transaction
+    JOIN account a ON a.id = tal.account
+    JOIN subsidiary s ON s.id = t.subsidiary
+    WHERE t.posting = 'T'
+      AND tal.accountingbook = {accounting_book}
+      AND s.name = '{_q(subsidiary)}'
+      AND t.postingperiod IN ({curr_id}, {prior_id})
+      AND a.accttype IN ({_types_csv(accttypes)})
+    GROUP BY a.acctnumber, a.fullname, a.accttype
+  ) x
+) f
+{review_filter}
+ORDER BY ABS(f.variance_abs) DESC
 """.strip()
 
 

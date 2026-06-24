@@ -31,6 +31,10 @@ Prior = the month before.** Resolve names → IDs with `ns_flux_sql.period_looku
    `range_start`/`range_end` (e.g. 0-50, 50-250, ...) until it returns an empty page. Each row has:
    `Classification`, `Account Type`, `Account` (= account **internal id**), `Month - 1` (current),
    `Month - 2` (prior), `Formula (Numeric)` (= difference). It is consolidated, single book.
+   *Token saver:* if the saved search adds a criteria to return only material movers (e.g.
+   `|Formula| >= <ABS_THRESHOLD>` and exclude rows where Month-1 = Month-2), it returns a handful
+   of rows instead of the whole trial balance — far fewer tokens. The in-code gate (step 3) still
+   applies as the authoritative check.
 3. **Apply the tolerance gate (in code — the search has no flag).** For each row: prior = Month-2,
    current = Month-1, variance = current − prior, pct = None if prior == 0 else variance/abs(prior).
    Flag **REVIEW** if `abs(variance) >= <ABS_THRESHOLD>` AND (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`).
@@ -51,14 +55,26 @@ Prior = the month before.** Resolve names → IDs with `ns_flux_sql.period_looku
 6. **Check (deterministic eval).** Run `ns_flux_eval.check_explanation(narrative, fact, drivers)`
    for each. If it returns not-ok, set that account's `eval_ok = False` (its narrative is withheld
    in the report). Never ship an unverified narrative.
-7. **Assemble report.** `ns_flux_report.build_report(meta, review_rows, ok_count)` → Markdown.
-   Write it to the report file (`out/flux_<SUBSIDIARY>_<current>.md`).
-8. **Draft email.** Create a Gmail **draft** to `<FINANCE_LIST>`:
-   - Subject: `Flux review — <SUBSIDIARY> — <current period>`
-   - Body: the report Markdown.
-   - **Never send.** A human reviews and sends.
+7. **Assemble the email in code (one call).** `email = ns_flux_report.build_email(meta, review_rows,
+   ok_count, notes)` returns `{subject, body (markdown), html}`. Pass `notes` any reviewer notes —
+   **anything containing digits (a `tranid`, a journal id like `JE164589`) goes in `notes`, NOT in a
+   narrative**, because the eval treats stray digits as invented figures. Write `email["body"]` to
+   the report file (`out/flux_<SUBSIDIARY>_<current>.md`). Do NOT hand-write HTML in the draft call —
+   `build_email` produces it (a token saver).
+8. **Draft email.** Create a Gmail **draft** to `<FINANCE_LIST>` with `subject=email["subject"]`,
+   `body=email["body"]`, `html_body=email["html"]`. **Never send.** A human reviews and sends.
 9. **On any failure** (NetSuite/Gmail connector unavailable, query error): stop, and draft/log a
    short failure notice to `<FINANCE_LIST>` instead of a partial report. Send nothing half-formed.
+
+## Token efficiency (right-size the context, not just the AI)
+- **Return only flagged rows.** For the SuiteQL fallback use `flux_sql(..., review_only=True)`; for
+  the saved search add a material-mover criteria (step 2). A trial balance is mostly flat — pulling
+  all of it into context is the biggest avoidable cost.
+- **Pre-aggregate drivers** (step 4) — the AI sees a few ranked rows, never raw transaction lines.
+- **Assemble the email in code** (`build_email`) — no hand-written HTML in tool calls.
+- **Cheapest model that meets the bar** for the explain step (Haiku-class): it is extract-and-
+  summarise over a tiny table.
+- The deterministic steps (calc, eval, report) cost **zero** model tokens — keep them in code.
 
 ## What is code vs AI (the right-size guarantee)
 | Step | Owner |

@@ -8,6 +8,7 @@ narrative, and an unverified narrative is never shipped - it is replaced by a fl
 The same Markdown is the body the pipeline puts into a Gmail draft.
 """
 
+import html as _html
 from datetime import datetime, timezone
 
 
@@ -19,15 +20,22 @@ def _pct(p):
     return "n/a" if p is None else f"{p*100:+.1f}%"
 
 
-def build_report(meta: dict, review_rows: list, ok_count: int) -> str:
+def _run_at(meta):
+    return meta.get("run_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
     """
     meta: subsidiary, current_period, prior_period, abs_threshold, pct_threshold, currency, run_at(optional)
     review_rows: dicts with account, current_amt, prior_amt, variance_abs, variance_pct,
                  direction, narrative, eval_ok (bool)
     ok_count: number of within-tolerance (OK) accounts not shown.
+    notes: optional list of reviewer-note strings (e.g. a flagged test tranid). Rendered as plain
+           text so they are NOT subject to the number/provenance eval - put references with digits
+           (journal ids, tranids) here, not in a narrative.
     """
     ccy = meta.get("currency", "EUR")
-    run_at = meta.get("run_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    run_at = _run_at(meta)
     flagged = len(review_rows)
     verified = sum(1 for r in review_rows if r.get("eval_ok"))
 
@@ -60,11 +68,84 @@ def build_report(meta: dict, review_rows: list, ok_count: int) -> str:
                      f"Variance: {_money(r['variance_abs'], ccy)} ({_pct(r['variance_pct'])}). "
                      f"Manual review required.")
         L.append("")
+    for n in (notes or []):
+        L.append(f"> **Reviewer note.** {n}")
+        L.append("")
     L.append("---")
     L.append("*Calculation and checks are deterministic (NetSuite saved search + SuiteQL + "
              "number/provenance eval). AI is used only to turn the flagged transactions into "
              "plain-language explanations. AI drafts, code checks, human approves.*")
     return "\n".join(L)
+
+
+def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
+    """HTML version of build_report, generated in code so the pipeline never hand-writes HTML
+    in a tool call (a big token saver). Same inputs as build_report."""
+    ccy = meta.get("currency", "EUR")
+    run_at = _run_at(meta)
+    flagged = len(review_rows)
+    verified = sum(1 for r in review_rows if r.get("eval_ok"))
+    e = _html.escape
+
+    cell = "padding:6px 8px;border:1px solid #ddd"
+    rcell = f"text-align:right;{cell}"
+    H = [f'<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;max-width:780px">']
+    H.append(f'<h2 style="margin:0 0 2px">Flux review - {e(str(meta["subsidiary"]))}</h2>')
+    H.append(f'<div style="color:#666;font-size:13px;margin-bottom:14px"><strong>{e(str(meta["current_period"]))} '
+             f'vs {e(str(meta["prior_period"]))}</strong> &nbsp;|&nbsp; generated {e(run_at)}</div>')
+    H.append(f'<p style="font-size:14px;margin:0 0 6px">Tolerance gate: absolute swing &ge; '
+             f'{_money(meta["abs_threshold"], ccy)} <strong>and</strong> (new account <strong>or</strong> '
+             f'percentage swing &ge; {meta["pct_threshold"]*100:.0f}%).</p>')
+    H.append(f'<p style="font-size:14px;margin:0 0 14px"><strong>{flagged} account(s) outside tolerance</strong>, '
+             f'{ok_count} within tolerance. Narratives passing the number/provenance check: '
+             f'<strong>{verified}/{flagged}</strong>.</p>')
+    H.append('<table style="border-collapse:collapse;font-size:13px;width:100%"><thead>'
+             '<tr style="background:#f3f4f6">'
+             f'<th style="text-align:left;{cell}">Account</th><th style="{rcell}">Prior</th>'
+             f'<th style="{rcell}">Current</th><th style="{rcell}">Variance</th>'
+             f'<th style="{rcell}">%</th><th style="text-align:left;{cell}">Direction</th></tr></thead><tbody>')
+    for i, r in enumerate(review_rows):
+        bg = ' style="background:#fafafa"' if i % 2 else ''
+        H.append(f'<tr{bg}><td style="{cell}">{e(str(r["account"]))}</td>'
+                 f'<td style="{rcell}">{_money(r["prior_amt"], ccy)}</td>'
+                 f'<td style="{rcell}">{_money(r["current_amt"], ccy)}</td>'
+                 f'<td style="{rcell}">{_money(r["variance_abs"], ccy)}</td>'
+                 f'<td style="{rcell}">{_pct(r["variance_pct"])}</td>'
+                 f'<td style="{cell}">{e(str(r["direction"]))}</td></tr>')
+    H.append('</tbody></table>')
+    H.append('<h3 style="margin:18px 0 4px">Explanations</h3>')
+    H.append('<p style="color:#666;font-size:12px;font-style:italic;margin:0 0 10px">AI drafted from the '
+             'underlying transactions; every figure and vendor below was checked deterministically against '
+             'the source data before this report was produced.</p>')
+    for r in review_rows:
+        if r.get("eval_ok"):
+            H.append(f'<p style="font-size:13px;margin:0 0 10px"><strong>{e(str(r["account"]))}.</strong> '
+                     f'{e(str(r["narrative"]))}</p>')
+        else:
+            H.append(f'<p style="font-size:13px;background:#fef2f2;border:1px solid #fecaca;padding:8px 10px;'
+                     f'border-radius:4px;margin:6px 0 10px"><strong>{e(str(r["account"]))} - withheld, failed '
+                     f'verification.</strong> The drafted explanation contained a figure or vendor not traceable '
+                     f'to source and was not shipped. Variance: {_money(r["variance_abs"], ccy)} '
+                     f'({_pct(r["variance_pct"])}). Manual review required.</p>')
+    for n in (notes or []):
+        H.append(f'<p style="font-size:13px;background:#fff7ed;border:1px solid #fed7aa;padding:8px 10px;'
+                 f'border-radius:4px;margin:6px 0 12px"><strong>Reviewer note.</strong> {e(str(n))}</p>')
+    H.append('<hr style="border:none;border-top:1px solid #ddd;margin:14px 0">')
+    H.append('<p style="color:#666;font-size:12px;font-style:italic;margin:0">Calculation and checks are '
+             'deterministic (NetSuite saved search / SuiteQL + number/provenance eval). AI is used only to turn '
+             'the flagged transactions into plain-language explanations. AI drafts, code checks, human approves.</p>')
+    H.append('</div>')
+    return "\n".join(H)
+
+
+def build_email(meta: dict, review_rows: list, ok_count: int, notes=None) -> dict:
+    """One call -> the whole draft. Pass these straight to Gmail create_draft (subject, body=plain
+    markdown, html_body=html) instead of hand-writing HTML each run."""
+    return {
+        "subject": f"Flux review - {meta['subsidiary']} - {meta['current_period']}",
+        "body": build_report(meta, review_rows, ok_count, notes),
+        "html": build_html(meta, review_rows, ok_count, notes),
+    }
 
 
 if __name__ == "__main__":

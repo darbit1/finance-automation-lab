@@ -59,6 +59,7 @@ narrative is never shipped.
 cd Week1
 python test_flux.py            # deterministic core + seam
 python test_ns_flux_eval.py    # transaction-level number + provenance eval
+python test_ns_flux_pipeline.py # server-side review filter + in-code email assembly
 ```
 
 ### Build vs buy
