@@ -54,9 +54,10 @@ the model only writes the narratives.
 
 Supporting material the routine does **not** call is kept **locally in `Week1/working/`** (a dev set,
 not tracked in this repo): `flux_engine.py` (pandas cross-check / reference engine), `ai_layer.py`
-(offline narrative templates), `synthetic_data.py` + `run_flux_demo.py` (local demo), and the test
-suites `test_flux.py` / `test_ns_flux_eval.py` / `test_ns_flux_pipeline.py`. The
-`saved_search_flux_recipe.md` UI guide stays in the repo.
+(offline narrative templates), `synthetic_data.py` + `run_flux_demo.py` (local demo), the test
+suites `test_flux.py` / `test_ns_flux_eval.py` / `test_ns_flux_pipeline.py`, and
+`saved_search_flux_recipe.md` (an earlier per-account UI recipe, superseded by the per-subsidiary
+search now in use).
 
 ---
 
@@ -117,9 +118,9 @@ else is committed Python.
 
 A trial balance is mostly flat, so the biggest cost is pulling rows you don't need into context.
 
-- **Return only flagged rows.** Add a material-mover criteria to the saved search (HAVING on the
-  summed difference — see `saved_search_flux_recipe.md`), or for the SuiteQL fallback use
-  `flux_sql(..., review_only=True)`. Discard flat rows on arrival regardless.
+- **Return only flagged rows.** The saved search already excludes zero-difference rows (a Summary
+  criteria on the difference); tighten it with an absolute floor if you want even fewer. For the
+  SuiteQL fallback use `flux_sql(..., review_only=True)`. Discard flat rows on arrival regardless.
 - **Pre-aggregate drivers** (step 4) — the AI sees a few ranked rows, never raw transaction lines.
 - **Assemble the email in code** (`build_email`) — no hand-written HTML in tool calls.
 - **Cheapest model that meets the bar** for the explain step (Haiku-class).

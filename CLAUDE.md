@@ -10,11 +10,13 @@ A public portfolio of AI-powered finance automations, built in public. Each fold
 - Reproducibility first: deterministic steps must be unit-tested and produce identical output on identical input.
 
 ## Stack
-Python 3.11 + pandas for calc/matching; pytest for tests. Node/JS where a build needs it.
-NetSuite access via the official AI Connector (MCP). n8n for orchestration builds.
+Python 3.12; deterministic runtime code uses the standard library (pandas only where a build truly
+needs dataframes). Tests are plain-assert scripts (pytest where a build warrants it). Node/JS where a
+build needs it. NetSuite access via the official AI Connector (MCP). n8n for orchestration builds.
 
 ## Conventions
-- Each build: a calc/deterministic layer, an AI layer, and a tests/ folder, kept separate.
+- Each build: a calc/deterministic layer, an AI layer, and tests, kept separate. Dev-only material
+  (demos, reference engines, test suites) can live in a local `working/` set, out of the public repo.
 - Functions small and pure where possible. Type hints. Docstrings explaining the finance logic.
 - Every AI call documents: which model, why that model (cost/quality), and the prompt.
 

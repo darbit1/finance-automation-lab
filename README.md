@@ -22,8 +22,9 @@ transactions, and produce a report + email draft — without an LLM ever touchin
 
 | Step | Owner | Why |
 |------|-------|-----|
-| Variance + within-tolerance flag | **NetSuite saved search / SuiteQL** | Deterministic, finance-owned, no developer needed |
-| Filter the flagged accounts | **Code** | A filter, not a judgement |
+| Variance, per subsidiary & account | **NetSuite saved search** | Deterministic, finance-owned, no developer needed |
+| Tolerance / materiality flag | **Code** (`ns_flux_sql.flag_reviews`) | Versioned + unit-tested, not buried in a formula |
+| Filter to the flagged accounts | **Code** | A filter, not a judgement |
 | Pull + pre-aggregate driver transactions | **SuiteQL `GROUP BY`** | Auditable retrieval |
 | Explain each movement in plain English | **AI** | The only AI step |
 | Verify every number + vendor in the explanation | **Code (the eval)** | The audit seam |
@@ -33,11 +34,10 @@ transactions, and produce a report + email draft — without an LLM ever touchin
 
 | File | Layer | Touches a number? |
 |------|-------|-------------------|
-| `Week1/ns_flux_sql.py` | genericised SuiteQL (flux + drivers) | yes (in NetSuite) |
+| `Week1/ns_flux_sql.py` | genericised SuiteQL (flux + drivers) + the tolerance gate | yes (in NetSuite / the gate) |
 | `Week1/eval_check.py` | number-match seam | checks only |
 | `Week1/ns_flux_eval.py` | transaction-level number + provenance eval | checks only |
 | `Week1/ns_flux_report.py` | deterministic report assembler | formats only |
-| `Week1/saved_search_flux_recipe.md` | build the calc in the NetSuite UI (no code) | — |
 | `Week1/flux_routine_playbook.md` | the scheduled-automation playbook | — |
 
 The pandas reference engine, the offline demo, and the test suites are kept in a local
@@ -56,7 +56,7 @@ narrative is never shipped.
 
 ### Tests
 
-The runtime modules are covered by 19 tests kept in the local `Week1/working/` dev set
+The runtime modules are covered by 24 tests kept in the local `Week1/working/` dev set
 (`test_flux.py`, `test_ns_flux_eval.py`, `test_ns_flux_pipeline.py`). They add `Week1/` to the path
 and run from `Week1/working/`.
 
