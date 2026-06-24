@@ -5,6 +5,23 @@ committed code/SuiteQL; the AI only turns flagged transactions into plain-langua
 a deterministic eval guards every explanation before anything is drafted. **AI drafts, code
 checks, human approves.**
 
+## Scripts used (all in `Week1/`, standard library only — no pip installs)
+The routine clones the repo and calls these committed modules. The AI only writes the narratives;
+every figure and check comes from this code.
+
+| Script | Used for | Key functions the routine calls |
+|--------|----------|---------------------------------|
+| `ns_flux_sql.py` | builds the deterministic SuiteQL the NetSuite tool runs | `period_lookup_sql()` (names→ids), `flux_sql(..., review_only=)` (calc + tolerance, SuiteQL fallback), `drivers_by_id_sql()` (single-book drivers for the saved-search flow), `drivers_sql()` (by acctnumber + subsidiary) |
+| `ns_flux_eval.py` | the audit seam: number-match + entity provenance over each AI narrative | `check_explanation(narrative, fact, drivers)`, `allowed_numbers()`, `allowed_entities()` |
+| `eval_check.py` | base number extraction reused by the eval | `extract_numbers()` (imported by `ns_flux_eval`) |
+| `ns_flux_report.py` | assembles the report + email in code (no hand-written HTML) | `build_email()` → `{subject, body, html}`, `build_report()`, `build_html()` |
+| `flux_routine_playbook.md` | this file — the run instructions | (read, not imported) |
+
+Supporting files in the repo, **not** invoked by the routine: `flux_engine.py` (pandas cross-check
+oracle / reference engine), `ai_layer.py` (offline narrative templates for the demo),
+`synthetic_data.py` + `run_flux_demo.py` (local demo), `saved_search_flux_recipe.md` (UI build
+guide), and the `test_*.py` suites (`test_flux.py`, `test_ns_flux_eval.py`, `test_ns_flux_pipeline.py`).
+
 ## Run config (set in the Routine, not committed)
 - `<SAVED_SEARCH_ID>` — the trial-balance saved search to run (returns Classification, Account Type,
   Account = internal id, Month - 1 = current, Month - 2 = prior, Formula = difference). It is the
