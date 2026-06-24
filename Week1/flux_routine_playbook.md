@@ -52,10 +52,11 @@ the model only writes the narratives.
 | `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers)` |
 | `ns_flux_report.py` | assembles the report + email **in code** (no hand-written HTML) | `build_email(meta, review_rows, ok_count, notes)` → `{subject, body, html}` |
 
-Supporting files in the repo that the routine does **not** call: `flux_engine.py` (pandas
-cross-check / reference engine), `ai_layer.py` (offline narrative templates for the demo),
-`synthetic_data.py` + `run_flux_demo.py` (local demo), `saved_search_flux_recipe.md` (UI build
-guide), and the test suites `test_flux.py` / `test_ns_flux_eval.py` / `test_ns_flux_pipeline.py`.
+Supporting material the routine does **not** call is kept **locally in `Week1/working/`** (a dev set,
+not tracked in this repo): `flux_engine.py` (pandas cross-check / reference engine), `ai_layer.py`
+(offline narrative templates), `synthetic_data.py` + `run_flux_demo.py` (local demo), and the test
+suites `test_flux.py` / `test_ns_flux_eval.py` / `test_ns_flux_pipeline.py`. The
+`saved_search_flux_recipe.md` UI guide stays in the repo.
 
 ---
 

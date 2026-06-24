@@ -18,6 +18,9 @@ out/
 *.report.md
 synthetic_tb.csv
 
+# --- Local working set (dev-only: demo, reference engine, tests; kept off GitHub) ---
+Week1/working/
+
 # --- Editor / OS / local config ---
 .vscode/
 .DS_Store

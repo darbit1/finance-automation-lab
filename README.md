@@ -33,14 +33,15 @@ transactions, and produce a report + email draft — without an LLM ever touchin
 
 | File | Layer | Touches a number? |
 |------|-------|-------------------|
-| `Week1/flux_engine.py` | deterministic variance/tier engine | yes (and the cross-check oracle) |
 | `Week1/ns_flux_sql.py` | genericised SuiteQL (flux + drivers) | yes (in NetSuite) |
-| `Week1/ai_layer.py` | AI read-in / explain-out | no |
 | `Week1/eval_check.py` | number-match seam | checks only |
 | `Week1/ns_flux_eval.py` | transaction-level number + provenance eval | checks only |
 | `Week1/ns_flux_report.py` | deterministic report assembler | formats only |
 | `Week1/saved_search_flux_recipe.md` | build the calc in the NetSuite UI (no code) | — |
 | `Week1/flux_routine_playbook.md` | the scheduled-automation playbook | — |
+
+The pandas reference engine, the offline demo, and the test suites are kept in a local
+`Week1/working/` dev set (not tracked here).
 
 ### The audit seam
 
@@ -53,14 +54,11 @@ the narrative before it can reach a report or email:
 If no transaction explains a movement, the AI must say so rather than invent a cause. An unverified
 narrative is never shipped.
 
-### Run the tests
+### Tests
 
-```bash
-cd Week1
-python test_flux.py            # deterministic core + seam
-python test_ns_flux_eval.py    # transaction-level number + provenance eval
-python test_ns_flux_pipeline.py # server-side review filter + in-code email assembly
-```
+The runtime modules are covered by 19 tests kept in the local `Week1/working/` dev set
+(`test_flux.py`, `test_ns_flux_eval.py`, `test_ns_flux_pipeline.py`). They add `Week1/` to the path
+and run from `Week1/working/`.
 
 ### Build vs buy
 
