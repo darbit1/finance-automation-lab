@@ -48,7 +48,7 @@ the model only writes the narratives.
 
 | Script | Role | Functions the routine calls |
 |--------|------|-----------------------------|
-| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes | `period_lookup_sql()` · `drivers_by_id_sql(account_ids, period_ids, book, subsidiary_ids=)` (single-book, scoped to the flagged entities, emits `subsidiary_id`) · `flux_sql(review_only=)` (SuiteQL fallback) |
+| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes, and applies the tolerance gate | `period_lookup_sql()` · `flag_reviews(rows, abs, pct)` → `(review_rows, ok_count)` · `drivers_by_id_sql(account_ids, period_ids, book, subsidiary_ids=)` (single-book, scoped, emits `subsidiary_id`) · `flux_sql(review_only=)` (SuiteQL fallback) |
 | `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers)` |
 | `ns_flux_report.py` | assembles the report + email **in code** (no hand-written HTML) | `build_email(meta, review_rows, ok_count, notes)` → `{subject, body, html}` |
 
@@ -76,7 +76,7 @@ Worked example: a run on **5 Jul 2026** → current = **Jun 2026**, prior = **Ma
 | 1a | Build period query | **Bash** | `ns_flux_sql.period_lookup_sql('Jun 2026','May 2026')` | names → a SuiteQL string |
 | 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → `curr_id`, `prior_id` |
 | 2 | The calc | **NetSuite** `ns_runSavedSearch(<SAVED_SEARCH_ID>)`, paged | — (the saved search *is* the calc) | → rows **per (subsidiary, account)**, already non-zero, with Subsidiary/Account Internal IDs + `Difference` |
-| 3 | Tolerance filter | **Bash** | inline Python gate | apply `abs ≥ <ABS> AND (new OR pct ≥ <PCT>)`; → REVIEW list (each with subsidiary id + account id) + `ok_count` |
+| 3 | Tolerance filter | **Bash** | `ns_flux_sql.flag_reviews(rows, <ABS>, <PCT>)` | → `(review_rows, ok_count)`; each review_row carries prior_amt/current_amt/variance_abs/variance_pct/direction + its subsidiary & account ids |
 | 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr,prior],<BOOK>,subsidiary_ids=[sub_ids])` | flagged ids → a SuiteQL string |
 | 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → driver rows with **subsidiary_id**; the caller matches each to its row by (subsidiary_id, account_id) |
 | 5 | Explain | **AI — the only AI step** | — | per account: one narrative from its facts + drivers only |
@@ -97,7 +97,8 @@ else is committed Python.
 
 - **Tolerance gate (step 3).** For each row: `variance = current − prior`; `pct = None if prior==0
   else variance/abs(prior)`. Flag **REVIEW** when `abs(variance) >= <ABS_THRESHOLD>` AND
-  (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`). The model never computes this.
+  (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`). The model never computes this — it is committed,
+  tested code (`ns_flux_sql.flag_reviews` / `is_review` / `variance_metrics`).
 - **Explanation constraints (step 5).** Each narrative may use **only** the account's facts (prior,
   current, variance, %) and its driver rows. Use no other number; name only vendors present in the
   drivers; if no driver explains the swing (e.g. journals with no vendor, or the swing sits in the

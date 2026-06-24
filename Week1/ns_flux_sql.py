@@ -148,6 +148,65 @@ ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC
 """.strip()
 
 
+# --- Tolerance gate (row processing, not SQL) --------------------------------
+# The saved-search flow applies the gate in code (the search returns the difference but no flag).
+# Keeping it here - tested and version-controlled - means every deterministic step is committed
+# code, not authored ad-hoc each run.
+
+def _to_float(v) -> float:
+    """Parse a saved-search numeric cell ('1,234.5', '-50', '', None) to float."""
+    if v is None:
+        return 0.0
+    s = str(v).strip().replace(",", "")
+    return float(s) if s not in ("", "-") else 0.0
+
+
+def variance_metrics(prior: float, current: float) -> dict:
+    """Deterministic variance facts for one account. variance_pct is None when prior == 0
+    (no divide-by-zero). direction: new | cleared | increase | decrease | flat."""
+    variance = round(current - prior, 2)
+    pct = None if prior == 0 else round(variance / abs(prior), 4)
+    if prior == 0 and current != 0:
+        direction = "new"
+    elif current == 0 and prior != 0:
+        direction = "cleared"
+    elif variance > 0:
+        direction = "increase"
+    elif variance < 0:
+        direction = "decrease"
+    else:
+        direction = "flat"
+    return {"variance_abs": variance, "variance_pct": pct, "direction": direction}
+
+
+def is_review(prior: float, current: float,
+              abs_threshold: float = 25000.0, pct_threshold: float = 0.10) -> bool:
+    """The tolerance gate, as one predicate: flag when the absolute swing is material AND the
+    account is new-from-zero OR the percentage swing is material."""
+    variance = current - prior
+    if abs(variance) < abs_threshold:
+        return False
+    return prior == 0 or abs(variance / abs(prior)) >= pct_threshold
+
+
+def flag_reviews(rows, abs_threshold: float = 25000.0, pct_threshold: float = 0.10,
+                 current_key: str = "Month - 1", prior_key: str = "Month - 2"):
+    """Apply the tolerance gate to parsed saved-search rows (dicts; numeric cells may be strings).
+    Returns (review_rows, ok_count). Each review_row is the original dict plus prior_amt,
+    current_amt, variance_abs, variance_pct, direction. The model never runs this - it is the
+    deterministic 'what gets flagged' step."""
+    reviews, ok_count = [], 0
+    for row in rows:
+        prior = _to_float(row.get(prior_key))
+        current = _to_float(row.get(current_key))
+        if is_review(prior, current, abs_threshold, pct_threshold):
+            reviews.append({**row, "prior_amt": prior, "current_amt": current,
+                            **variance_metrics(prior, current)})
+        else:
+            ok_count += 1
+    return reviews, ok_count
+
+
 if __name__ == "__main__":
     # Smoke: print the queries with placeholder args (no real data).
     print(flux_sql("<SUBSIDIARY>", 0, 0, 25000, 0.10))
