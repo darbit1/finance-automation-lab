@@ -93,6 +93,36 @@ Prior = the month before.** Resolve names → IDs with `ns_flux_sql.period_looku
   summarise over a tiny table.
 - The deterministic steps (calc, eval, report) cost **zero** model tokens — keep them in code.
 
+## Execution trace (what runs, in order — tool -> script -> function)
+
+The cloud agent is the orchestrator. It has three kinds of tool: the **NetSuite** connector
+(`ns_runCustomSuiteQL`, `ns_runSavedSearch`), the **Gmail** connector (`create_draft`), and
+**Bash** (to run the committed Python in the cloned repo). **Key pattern:** a SuiteQL query is
+*built* by a Python function and then *executed* by the NetSuite tool — that is two calls (Bash to
+print the query string, then `ns_runCustomSuiteQL` to run it). The saved search is the exception:
+`ns_runSavedSearch` runs it directly. Worked example below: run on 5 Jul 2026 -> current = Jun 2026,
+prior = May 2026.
+
+| # | Step | Tool invoked | Script.function it runs | In -> Out |
+|---|------|--------------|--------------------------|-----------|
+| 0 | Trigger | (platform cron) | — | cron `0 6 5 * *` fires; cloud agent clones the repo, attaches NetSuite + Gmail |
+| 1a | Build period query | **Bash** | `ns_flux_sql.period_lookup_sql('Jun 2026','May 2026')` | period names -> a SuiteQL string |
+| 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | -> `{Jun 2026: id, May 2026: id}` = curr_id, prior_id |
+| 2 | The calc | **NetSuite** `ns_runSavedSearch` (`customsearch17430`, paged) | — (the saved search IS the deterministic calc) | -> trial-balance rows: Classification, Account(id), Month-1, Month-2, Formula(diff) |
+| 3 | Tolerance filter | **Bash** | small inline Python (the gate) | rows -> drop flat; flag REVIEW where `abs(var)>=25000 AND (new OR abs(pct)>=0.10)`; -> REVIEW list + ok_count |
+| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr_id,prior_id],1)` | flagged account ids -> a SuiteQL string |
+| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | -> driver rows: subsidiary, type, **tranid**, vendor/entity, lines, amount (single book) |
+| 5 | Explain | **(AI — the only AI step, no tool)** | — | per flagged account: one narrative from its facts + drivers only |
+| 6 | Verify | **Bash** | `ns_flux_eval.check_explanation(narrative, fact, drivers)` | narrative -> `(ok, bad_numbers, bad_entities)`; set `eval_ok`, withhold failures |
+| 7 | Assemble | **Bash** | `ns_flux_report.build_email(meta, review_rows, ok_count, notes)` | -> `{subject, body, html}`; write `body` to `out/flux_TB_IS_<current>.md` |
+| 8 | Draft | **Gmail** `create_draft` | — | subject/body/html -> a draft in Drafts (recipient finance@darbit.nl). **Never sent.** |
+| 9 | Summary | (print) | — | periods used, #REVIEW, #verified, draft id |
+| F | On any tool/query error | **Gmail** `create_draft` | — | a `Flux review - FAILED` notice instead of a partial report; stop |
+
+Note: the deterministic modules use only the Python standard library, so Bash steps need no
+`pip install`. Steps 1b/2/4b are the only NetSuite calls; step 8 is the only Gmail call; steps 5
+is the only place the model authors text.
+
 ## What is code vs AI (the right-size guarantee)
 | Step | Owner |
 |---|---|
