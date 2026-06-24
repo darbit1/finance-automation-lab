@@ -1,140 +1,143 @@
-# Flux automation — Routine playbook
+# Flux review automation — playbook
 
-The instruction set the scheduled Claude Routine runs each month. Deterministic work is done by
-committed code/SuiteQL; the AI only turns flagged transactions into plain-language explanations;
-a deterministic eval guards every explanation before anything is drafted. **AI drafts, code
-checks, human approves.**
+A monthly flux (variance) review on a NetSuite trial balance: detect the accounts that moved
+materially between two periods, explain each movement from its underlying transactions, and produce
+a report plus a Gmail **draft** for a human to review and send.
 
-## Scripts used (all in `Week1/`, standard library only — no pip installs)
-The routine clones the repo and calls these committed modules. The AI only writes the narratives;
-every figure and check comes from this code.
+The design rule is **right-size the AI**: the calculation and every check are deterministic (a
+NetSuite saved search + committed Python); the model is used only to turn the flagged transactions
+into plain-language sentences. A deterministic eval then verifies that explanation before anything
+is drafted. **AI drafts, code checks, human approves.**
 
-| Script | Used for | Key functions the routine calls |
-|--------|----------|---------------------------------|
-| `ns_flux_sql.py` | builds the deterministic SuiteQL the NetSuite tool runs | `period_lookup_sql()` (names→ids), `flux_sql(..., review_only=)` (calc + tolerance, SuiteQL fallback), `drivers_by_id_sql()` (single-book drivers for the saved-search flow), `drivers_sql()` (by acctnumber + subsidiary) |
-| `ns_flux_eval.py` | the audit seam: number-match + entity provenance over each AI narrative | `check_explanation(narrative, fact, drivers)`, `allowed_numbers()`, `allowed_entities()` |
-| `eval_check.py` | base number extraction reused by the eval | `extract_numbers()` (imported by `ns_flux_eval`) |
-| `ns_flux_report.py` | assembles the report + email in code (no hand-written HTML) | `build_email()` → `{subject, body, html}`, `build_report()`, `build_html()` |
-| `flux_routine_playbook.md` | this file — the run instructions | (read, not imported) |
+> All values in this document are placeholders. The live deployment's concrete values (saved search
+> id, recipient, thresholds) are set in the Routine config, not here. No client data lives in this repo.
 
-Supporting files in the repo, **not** invoked by the routine: `flux_engine.py` (pandas cross-check
-oracle / reference engine), `ai_layer.py` (offline narrative templates for the demo),
+---
+
+## 1. How it is scheduled
+
+It runs as a **Claude Routine** — a scheduled agent that executes in Anthropic's cloud (not on a
+local machine), so it fires regardless of whether any laptop is on.
+
+- **Schedule:** cron `0 6 5 * *` → 06:00 UTC on the 5th of each month (≈ 08:00 Amsterdam in summer,
+  07:00 in winter; cron is fixed UTC and does not track DST).
+- **Each fire**, the cloud agent: (1) clones the GitHub repo so it has the committed Python, (2) has
+  the **NetSuite** and **Gmail** connectors attached, (3) follows this playbook.
+- **Manage it** (enable/disable, change the time, run now, delete) in the claude.ai Routines UI.
+
+---
+
+## 2. Configuration
+
+Set on the Routine, not committed here:
+
+| Setting | Meaning | Default |
+|---------|---------|---------|
+| `<SAVED_SEARCH_ID>` | the trial-balance saved search to run. Returns `Classification`, `Account Type`, `Account` (= account **internal id**), `Month - 1` (current), `Month - 2` (prior), `Formula (Numeric)` (= difference). Consolidated, single book. | — |
+| `<ACCOUNTING_BOOK>` | the book the saved search reports on. Driver pulls MUST use the same book, or the variance is over-stated (`transactionaccountingline` has one row per book). | `1` (primary) |
+| `<ABS_THRESHOLD>` / `<PCT_THRESHOLD>` | the tolerance gate. The saved search returns the difference but no flag, so the gate is applied in code. | `25000` / `0.10` |
+| `<RECIPIENT>` | the Gmail draft recipient. **Draft only; never send.** | — |
+| model | the model the agent runs as. The explanation is extract-and-summarise over a tiny table, so an economical (Haiku-class) model is sufficient. | — |
+
+---
+
+## 3. Scripts used
+
+All in `Week1/`, **Python standard library only** (no `pip install` needed). The agent calls these;
+the model only writes the narratives.
+
+| Script | Role | Functions the routine calls |
+|--------|------|-----------------------------|
+| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes | `period_lookup_sql()` · `drivers_by_id_sql()` · `flux_sql(review_only=)` (SuiteQL fallback when not using the saved search) |
+| `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers)` |
+| `ns_flux_report.py` | assembles the report + email **in code** (no hand-written HTML) | `build_email(meta, review_rows, ok_count, notes)` → `{subject, body, html}` |
+
+Supporting files in the repo that the routine does **not** call: `flux_engine.py` (pandas
+cross-check / reference engine), `ai_layer.py` (offline narrative templates for the demo),
 `synthetic_data.py` + `run_flux_demo.py` (local demo), `saved_search_flux_recipe.md` (UI build
-guide), and the `test_*.py` suites (`test_flux.py`, `test_ns_flux_eval.py`, `test_ns_flux_pipeline.py`).
+guide), and the test suites `test_flux.py` / `test_ns_flux_eval.py` / `test_ns_flux_pipeline.py`.
 
-## Run config (set in the Routine, not committed)
-- `<SAVED_SEARCH_ID>` — the trial-balance saved search to run (returns Classification, Account Type,
-  Account = internal id, Month - 1 = current, Month - 2 = prior, Formula = difference). It is the
-  single source of the calc; it is consolidated and reports on one accounting book.
-- `<ACCOUNTING_BOOK>` — the book the saved search reports on. Default `1` (primary). Driver pulls
-  MUST use the same book or the variance is over-stated (transactionaccountingline has one row per
-  book).
-- `<ABS_THRESHOLD>` / `<PCT_THRESHOLD>` — tolerance gate. Default `25000` / `0.10`. (The saved
-  search returns the difference but NO tolerance flag, so the gate is applied in code.)
-- `<FINANCE_LIST>` — Gmail draft recipient. **Draft only; never send.**
-- Model: use an economical model (Haiku-class) for the explanation step — it is extract-and-
-  summarise over a tiny pre-aggregated table, not reasoning-heavy. (Documented per CLAUDE.md.)
+---
 
-## Cadence
-Monthly, a few working days into the new month (after close). **Current = the just-closed month;
-Prior = the month before.** Resolve names → IDs with `ns_flux_sql.period_lookup_sql(...)`.
+## 4. How a run executes
 
-## Steps (each run)
-1. **Resolve periods.** From the run date, current = the just-closed month (month before the run
-   month), prior = the month before that. Resolve both names to internal IDs with
-   `ns_flux_sql.period_lookup_sql(current_name, prior_name)` via the NetSuite SuiteQL tool. Abort
-   (FAILURE) if either is missing.
-2. **Run the saved search.** `ns_runSavedSearch(searchId=<SAVED_SEARCH_ID>)`, paging with
-   `range_start`/`range_end` (e.g. 0-50, 50-250, ...) until it returns an empty page. Each row has:
-   `Classification`, `Account Type`, `Account` (= account **internal id**), `Month - 1` (current),
-   `Month - 2` (prior), `Formula (Numeric)` (= difference). It is consolidated, single book.
-   *Token saver:* if the saved search adds a criteria to return only material movers (e.g.
-   `|Formula| >= <ABS_THRESHOLD>` and exclude rows where Month-1 = Month-2), it returns a handful
-   of rows instead of the whole trial balance — far fewer tokens. The in-code gate (step 3) still
-   applies as the authoritative check.
-3. **Apply the tolerance gate (in code — the search has no flag).** For each row: prior = Month-2,
-   current = Month-1, variance = current − prior, pct = None if prior == 0 else variance/abs(prior).
-   Flag **REVIEW** if `abs(variance) >= <ABS_THRESHOLD>` AND (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`).
-   Record the count of within-tolerance rows. If zero REVIEW → assemble a one-line "all within
-   tolerance" report, draft it (step 8), stop.
-4. **Pull drivers.** For the REVIEW account internal ids, run
-   `ns_flux_sql.drivers_by_id_sql(account_ids, [curr_id, prior_id], <ACCOUNTING_BOOK>)` via the
-   NetSuite SuiteQL tool. **Same book as the saved search** (else the variance is over-stated). This
-   pre-aggregated table (by period / subsidiary / type / vendor, with `tranid`) is the ONLY
-   transaction context the AI sees. Flag any test/one-off `tranid` as a reviewer note.
-5. **Explain (AI).** For each REVIEW account, write ONE plain-language paragraph using **only**:
-   the account's facts (prior, current, variance, %) and its driver rows. Rules:
-   - Use only numbers present in those facts/drivers. Introduce no other figure.
-   - Name only vendors/entities present in the driver rows.
-   - If no driver explains the swing (e.g. journals with no vendor, or the swing sits in the prior
-     period), write: *"driver not determinable from current transactions — refer to <prior period>
-     journals."* Do **not** invent a cause.
-6. **Check (deterministic eval).** Run `ns_flux_eval.check_explanation(narrative, fact, drivers)`
-   for each. If it returns not-ok, set that account's `eval_ok = False` (its narrative is withheld
-   in the report). Never ship an unverified narrative.
-7. **Assemble the email in code (one call).** `email = ns_flux_report.build_email(meta, review_rows,
-   ok_count, notes)` returns `{subject, body (markdown), html}`. Pass `notes` any reviewer notes —
-   **anything containing digits (a `tranid`, a journal id like `JE164589`) goes in `notes`, NOT in a
-   narrative**, because the eval treats stray digits as invented figures. Write `email["body"]` to
-   the report file (`out/flux_<SUBSIDIARY>_<current>.md`). Do NOT hand-write HTML in the draft call —
-   `build_email` produces it (a token saver).
-8. **Draft email.** Create a Gmail **draft** to `<FINANCE_LIST>` with `subject=email["subject"]`,
-   `body=email["body"]`, `html_body=email["html"]`. **Never send.** A human reviews and sends.
-9. **On any failure** (NetSuite/Gmail connector unavailable, query error): stop, and draft/log a
-   short failure notice to `<FINANCE_LIST>` instead of a partial report. Send nothing half-formed.
+The agent orchestrates three kinds of tool: the **NetSuite** connector (`ns_runCustomSuiteQL`,
+`ns_runSavedSearch`), the **Gmail** connector (`create_draft`), and **Bash** (to run the committed
+Python). One pattern to keep in mind: **a SuiteQL query is *built* by a Python function, then
+*executed* by a separate NetSuite tool call** — two steps. The saved search is the exception
+(`ns_runSavedSearch` runs it directly).
 
-## Token efficiency (right-size the context, not just the AI)
-- **Return only flagged rows.** For the SuiteQL fallback use `flux_sql(..., review_only=True)`; for
-  the saved search add a material-mover criteria (step 2). A trial balance is mostly flat — pulling
-  all of it into context is the biggest avoidable cost.
+Worked example: a run on **5 Jul 2026** → current = **Jun 2026**, prior = **May 2026**.
+
+| # | Step | Tool | Script.function | In → Out |
+|---|------|------|-----------------|----------|
+| 0 | Trigger | platform cron | — | `0 6 5 * *` fires; agent clones the repo, attaches NetSuite + Gmail |
+| 1a | Build period query | **Bash** | `ns_flux_sql.period_lookup_sql('Jun 2026','May 2026')` | names → a SuiteQL string |
+| 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → `curr_id`, `prior_id` |
+| 2 | The calc | **NetSuite** `ns_runSavedSearch(<SAVED_SEARCH_ID>)`, paged | — (the saved search *is* the calc) | → trial-balance rows |
+| 3 | Tolerance filter | **Bash** | inline Python gate | drop flat rows; flag REVIEW; → REVIEW list + `ok_count` |
+| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr_id,prior_id],<BOOK>)` | flagged ids → a SuiteQL string |
+| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → driver rows: subsidiary, type, **tranid**, vendor, lines, amount |
+| 5 | Explain | **AI — the only AI step** | — | per account: one narrative from its facts + drivers only |
+| 6 | Verify | **Bash** | `ns_flux_eval.check_explanation(narrative, fact, drivers)` | → `(ok, bad_numbers, bad_entities)`; set `eval_ok` |
+| 7 | Assemble | **Bash** | `ns_flux_report.build_email(meta, review_rows, ok_count, notes)` | → `{subject, body, html}`; write `body` to `out/flux_<period>.md` |
+| 8 | Draft | **Gmail** `create_draft` | — | → a draft in Drafts, to `<RECIPIENT>`. **Never sent.** |
+| 9 | Summary | print | — | periods used, #REVIEW, #verified, draft id |
+
+So: ask NetSuite for the period ids (1) → run the saved search for the trial balance (2) → Python
+filters to the few flagged accounts (3) → ask NetSuite for the transactions behind them (4) → the
+**AI writes the reason** (5) → Python checks every number and vendor in it (6) → Python builds the
+email (7) → Gmail saves the draft (8). Three NetSuite calls, one Gmail call, one AI step; everything
+else is committed Python.
+
+---
+
+## 5. The rules that make it auditable
+
+- **Tolerance gate (step 3).** For each row: `variance = current − prior`; `pct = None if prior==0
+  else variance/abs(prior)`. Flag **REVIEW** when `abs(variance) >= <ABS_THRESHOLD>` AND
+  (`prior == 0` OR `abs(pct) >= <PCT_THRESHOLD>`). The model never computes this.
+- **Explanation constraints (step 5).** Each narrative may use **only** the account's facts (prior,
+  current, variance, %) and its driver rows. Use no other number; name only vendors present in the
+  drivers; if no driver explains the swing (e.g. journals with no vendor, or the swing sits in the
+  prior period) write *"driver not determinable from current transactions — refer to <prior period>
+  journals"* — do **not** invent a cause. Put any reference that contains digits (a `tranid`, a
+  journal id like `JE164589`) in `notes`, **not** in the narrative — the eval treats stray digits as
+  invented figures.
+- **The eval is the gate (step 6).** `check_explanation` returns not-ok if any figure or vendor is
+  not traceable to the facts/drivers. A failing narrative is set `eval_ok = False` and **withheld**
+  from the report — an unverified explanation is never shipped.
+- **Draft, never send (step 8).** A human reviews and sends.
+
+---
+
+## 6. Token efficiency
+
+A trial balance is mostly flat, so the biggest cost is pulling rows you don't need into context.
+
+- **Return only flagged rows.** Add a material-mover criteria to the saved search (HAVING on the
+  summed difference — see `saved_search_flux_recipe.md`), or for the SuiteQL fallback use
+  `flux_sql(..., review_only=True)`. Discard flat rows on arrival regardless.
 - **Pre-aggregate drivers** (step 4) — the AI sees a few ranked rows, never raw transaction lines.
 - **Assemble the email in code** (`build_email`) — no hand-written HTML in tool calls.
-- **Cheapest model that meets the bar** for the explain step (Haiku-class): it is extract-and-
-  summarise over a tiny table.
-- The deterministic steps (calc, eval, report) cost **zero** model tokens — keep them in code.
+- **Cheapest model that meets the bar** for the explain step (Haiku-class).
+- The deterministic steps cost **zero** model tokens — keep them in code.
 
-## Execution trace (what runs, in order — tool -> script -> function)
+---
 
-The cloud agent is the orchestrator. It has three kinds of tool: the **NetSuite** connector
-(`ns_runCustomSuiteQL`, `ns_runSavedSearch`), the **Gmail** connector (`create_draft`), and
-**Bash** (to run the committed Python in the cloned repo). **Key pattern:** a SuiteQL query is
-*built* by a Python function and then *executed* by the NetSuite tool — that is two calls (Bash to
-print the query string, then `ns_runCustomSuiteQL` to run it). The saved search is the exception:
-`ns_runSavedSearch` runs it directly. Worked example below: run on 5 Jul 2026 -> current = Jun 2026,
-prior = May 2026.
+## 7. Failure handling & prerequisites
 
-| # | Step | Tool invoked | Script.function it runs | In -> Out |
-|---|------|--------------|--------------------------|-----------|
-| 0 | Trigger | (platform cron) | — | cron `0 6 5 * *` fires; cloud agent clones the repo, attaches NetSuite + Gmail |
-| 1a | Build period query | **Bash** | `ns_flux_sql.period_lookup_sql('Jun 2026','May 2026')` | period names -> a SuiteQL string |
-| 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | -> `{Jun 2026: id, May 2026: id}` = curr_id, prior_id |
-| 2 | The calc | **NetSuite** `ns_runSavedSearch` (`customsearch17430`, paged) | — (the saved search IS the deterministic calc) | -> trial-balance rows: Classification, Account(id), Month-1, Month-2, Formula(diff) |
-| 3 | Tolerance filter | **Bash** | small inline Python (the gate) | rows -> drop flat; flag REVIEW where `abs(var)>=25000 AND (new OR abs(pct)>=0.10)`; -> REVIEW list + ok_count |
-| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr_id,prior_id],1)` | flagged account ids -> a SuiteQL string |
-| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | -> driver rows: subsidiary, type, **tranid**, vendor/entity, lines, amount (single book) |
-| 5 | Explain | **(AI — the only AI step, no tool)** | — | per flagged account: one narrative from its facts + drivers only |
-| 6 | Verify | **Bash** | `ns_flux_eval.check_explanation(narrative, fact, drivers)` | narrative -> `(ok, bad_numbers, bad_entities)`; set `eval_ok`, withhold failures |
-| 7 | Assemble | **Bash** | `ns_flux_report.build_email(meta, review_rows, ok_count, notes)` | -> `{subject, body, html}`; write `body` to `out/flux_TB_IS_<current>.md` |
-| 8 | Draft | **Gmail** `create_draft` | — | subject/body/html -> a draft in Drafts (recipient finance@darbit.nl). **Never sent.** |
-| 9 | Summary | (print) | — | periods used, #REVIEW, #verified, draft id |
-| F | On any tool/query error | **Gmail** `create_draft` | — | a `Flux review - FAILED` notice instead of a partial report; stop |
+**On any failure** (NetSuite or Gmail connector unavailable, a query error): do **not** ship a
+partial report. Create a Gmail draft to `<RECIPIENT>` with subject `Flux review - FAILED - <date>`
+and a one-paragraph description of what failed, then stop.
 
-Note: the deterministic modules use only the Python standard library, so Bash steps need no
-`pip install`. Steps 1b/2/4b are the only NetSuite calls; step 8 is the only Gmail call; steps 5
-is the only place the model authors text.
+For a run to succeed, four things must hold:
+1. The Routine inherits the **NetSuite + Gmail connectors** in the cloud. *(The first scheduled run
+   is the real test of this — trigger a manual run to verify ahead of time.)*
+2. The **repo** is reachable (public) so the cloud clones the committed Python.
+3. The **saved search** `<SAVED_SEARCH_ID>` exists and returns the expected columns.
+4. The **connector auth** (NetSuite token, Gmail) is still valid at run time.
 
-## What is code vs AI (the right-size guarantee)
-| Step | Owner |
-|---|---|
-| Flux calc + tolerance (2) | NetSuite saved search / SuiteQL — deterministic |
-| Filter REVIEW (3) | Code — a filter |
-| Driver pre-aggregation (4) | SuiteQL `GROUP BY` — deterministic |
-| Explanation (5) | **AI** — the only AI step |
-| Number + provenance check (6) | `ns_flux_eval` — deterministic |
-| Report + draft assembly (7–8) | Code — deterministic; numbers never come from the AI |
-
-## Known caveat
-The Routine runs headless in the cloud. It must inherit the NetSuite + Gmail connectors. The first
-scheduled run is the real test of that; step 9 ensures a failure is reported, not silently shipped.
-If connectors aren't available in the Routine environment, move orchestration to n8n (Week 7) or a
-local Python job with Gmail OAuth.
+If the cloud connectors ever prove unavailable, move orchestration to n8n or a local Python job with
+Gmail OAuth — the committed modules (`ns_flux_sql`, `ns_flux_eval`, `ns_flux_report`) are unchanged
+either way.
