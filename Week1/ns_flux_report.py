@@ -70,20 +70,27 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
              f"Narratives passing the number/provenance check: {verified}/{flagged}.")
     L.append("")
     show_sub = any(r.get("subsidiary") for r in review_rows)
+    show_dept = any(r.get("Department") for r in review_rows)
+    show_class = any(r.get("Class") for r in review_rows)
     show_sply = any(r.get("sply_amount") is not None for r in review_rows)
     show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
     show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
-    cols = (["Subsidiary"] if show_sub else []) + ["Account", "Prior", "Current"] \
+    cols = (["Subsidiary"] if show_sub else []) + ["Account"] \
+        + (["Department"] if show_dept else []) + (["Class"] if show_class else []) \
+        + ["Prior", "Current"] \
         + (["SPLY"] if show_sply else []) + (["YTD"] if show_ytd else []) \
         + ["Variance", "%"] + (["% of base"] if show_cs else []) + ["Direction"]
-    aligns = (["---"] if show_sub else []) + ["---", "--:", "--:"] \
+    aligns = (["---"] if show_sub else []) + ["---"] \
+        + (["---"] if show_dept else []) + (["---"] if show_class else []) \
+        + ["--:", "--:"] \
         + (["--:"] if show_sply else []) + (["--:"] if show_ytd else []) \
         + ["--:", "--:"] + (["--:"] if show_cs else []) + [":--"]
     L.append("| " + " | ".join(cols) + " |")
     L.append("|" + "|".join(aligns) + "|")
     for r in review_rows:
-        cells = ([r.get("subsidiary", "")] if show_sub else []) \
-            + [r["account"], _money(r["prior_amt"], ccy), _money(r["current_amt"], ccy)] \
+        cells = ([r.get("subsidiary", "")] if show_sub else []) + [r["account"]] \
+            + ([r.get("Department", "")] if show_dept else []) + ([r.get("Class", "")] if show_class else []) \
+            + [_money(r["prior_amt"], ccy), _money(r["current_amt"], ccy)] \
             + ([_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"] if show_sply else []) \
             + ([_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"] if show_ytd else []) \
             + [_money(r["variance_abs"], ccy), _pct(r["variance_pct"])] \
@@ -145,27 +152,33 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
              f'{ok_count} within tolerance. Narratives passing the number/provenance check: '
              f'<strong>{verified}/{flagged}</strong>.</p>')
     show_sub = any(r.get("subsidiary") for r in review_rows)
+    show_dept = any(r.get("Department") for r in review_rows)
+    show_class = any(r.get("Class") for r in review_rows)
     show_sply = any(r.get("sply_amount") is not None for r in review_rows)
     show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
     show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
     sub_th = f'<th style="text-align:left;{cell}">Subsidiary</th>' if show_sub else ''
+    dept_th = f'<th style="text-align:left;{cell}">Department</th>' if show_dept else ''
+    class_th = f'<th style="text-align:left;{cell}">Class</th>' if show_class else ''
     sply_th = f'<th style="{rcell}">SPLY</th>' if show_sply else ''
     ytd_th = f'<th style="{rcell}">YTD</th>' if show_ytd else ''
     cs_th = f'<th style="{rcell}">% of base</th>' if show_cs else ''
     H.append('<table style="border-collapse:collapse;font-size:13px;width:100%"><thead>'
              '<tr style="background:#f3f4f6">'
-             f'{sub_th}<th style="text-align:left;{cell}">Account</th><th style="{rcell}">Prior</th>'
+             f'{sub_th}<th style="text-align:left;{cell}">Account</th>{dept_th}{class_th}<th style="{rcell}">Prior</th>'
              f'<th style="{rcell}">Current</th>{sply_th}{ytd_th}<th style="{rcell}">Variance</th>'
              f'<th style="{rcell}">%</th>{cs_th}<th style="text-align:left;{cell}">Direction</th></tr></thead><tbody>')
     for i, r in enumerate(review_rows):
         bg = ' style="background:#fafafa"' if i % 2 else ''
         sub_td = f'<td style="{cell}">{e(str(r.get("subsidiary", "")))}</td>' if show_sub else ''
+        dept_td = f'<td style="{cell}">{e(str(r.get("Department", "")))}</td>' if show_dept else ''
+        class_td = f'<td style="{cell}">{e(str(r.get("Class", "")))}</td>' if show_class else ''
         sply_td = (f'<td style="{rcell}">{_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"}</td>'
                    if show_sply else '')
         ytd_td = (f'<td style="{rcell}">{_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"}</td>'
                   if show_ytd else '')
         cs_td = f'<td style="{rcell}">{_cs(r.get("common_size_pct"))}</td>' if show_cs else ''
-        H.append(f'<tr{bg}>{sub_td}<td style="{cell}">{e(str(r["account"]))}</td>'
+        H.append(f'<tr{bg}>{sub_td}<td style="{cell}">{e(str(r["account"]))}</td>{dept_td}{class_td}'
                  f'<td style="{rcell}">{_money(r["prior_amt"], ccy)}</td>'
                  f'<td style="{rcell}">{_money(r["current_amt"], ccy)}</td>{sply_td}{ytd_td}'
                  f'<td style="{rcell}">{_money(r["variance_abs"], ccy)}</td>'
