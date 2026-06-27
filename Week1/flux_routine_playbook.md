@@ -22,7 +22,12 @@ local machine), so it fires regardless of whether any laptop is on.
 - **Schedule:** cron `0 6 5 * *` → 06:00 UTC on the 5th of each month (≈ 08:00 Amsterdam in summer,
   07:00 in winter; cron is fixed UTC and does not track DST).
 - **Each fire**, the cloud agent: (1) clones the GitHub repo so it has the committed Python, (2) has
-  the **NetSuite** and **Gmail** connectors attached, (3) follows this playbook.
+  the **NetSuite** and **Gmail** connectors attached, (3) follows the routine prompt.
+- **The prompt is [`flux_routine_prompt.md`](flux_routine_prompt.md)** — the canonical, version-
+  controlled instruction. **It must be pasted into the claude.ai Routine's message field**; the repo
+  copy documents it but the live copy is what runs. This playbook explains the flow; the prompt *is*
+  the flow. (A run is only as good as that prompt — if it doesn't call the grounding/trend/vendor-
+  bridge functions, the narratives fall back to thin "not determinable" text.)
 - **Manage it** (enable/disable, change the time, run now, delete) in the claude.ai Routines UI.
 
 ---
@@ -49,8 +54,8 @@ the model only writes the narratives.
 
 | Script | Role | Functions the routine calls |
 |--------|------|-----------------------------|
-| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes, applies the tolerance gate, and computes the deterministic comparison facts | `period_lookup_sql()` (resolves the whole set: current/prior/SPLY/YTD) · `flag_reviews(rows, abs, pct)` → `(review_rows, ok_count)` · `drivers_by_id_sql(account_ids, period_ids, book, subsidiary_ids=, with_grounding=, top_n=)` (single-book, scoped, emits `subsidiary_id`; **`with_grounding`** adds memo/dept/class/location, **`top_n`** caps to the largest drivers) · `account_history_sql(...)` (trailing-period totals) · `trend_facts(...)` (recurrence / SPLY / trailing-avg) · `common_size_by_classification(...)` (BS → % assets, IS → % revenue) · `period_total(...)` (YTD, only if the search doesn't carry it) · `confidence_score(...)` · `sensitivity(...)` · `flux_sql(review_only=)` (SuiteQL fallback) |
-| `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers, extra_facts=)` (`extra_facts` grounds the code-computed trend/SPLY/YTD figures the AI may cite) |
+| `ns_flux_sql.py` | builds the SuiteQL strings the NetSuite tool executes, applies the tolerance gate, and computes the deterministic comparison facts | `period_lookup_sql()` (resolves the whole set: current/prior/SPLY/YTD) · `flag_reviews(rows, abs, pct)` → `(review_rows, ok_count)` · `drivers_by_id_sql(account_ids, period_ids, book, subsidiary_ids=, with_grounding=, top_n=)` (single-book, scoped, emits `subsidiary_id`; **`with_grounding`** adds memo/dept/class/location, **`top_n`** caps to the largest drivers) · `account_history_sql(...)` (trailing-period totals) · `trend_facts(...)` (recurrence / SPLY / trailing-avg) · `vendor_bridge(...)` (per-vendor decomposition: new / dropped / increased / decreased) · `common_size_by_classification(...)` (BS → % assets, IS → % revenue) · `period_total(...)` (YTD, only if the search doesn't carry it) · `confidence_score(...)` · `sensitivity(...)` · `flux_sql(review_only=)` (SuiteQL fallback) |
+| `ns_flux_eval.py` (+ `eval_check.py`) | the audit seam: number-match + entity provenance | `check_explanation(narrative, fact, drivers, extra_facts=, allowed_refs=)` (`extra_facts` grounds the code-computed trend/SPLY/YTD + vendor-bridge figures; `allowed_refs` lets the narrative cite pulled tranids/journal-ids/bill-names) |
 | `ns_flux_report.py` | assembles the report + email **in code** (no hand-written HTML) | `build_email(meta, review_rows, ok_count, notes)` → `{subject, body, html}` (renders optional Subsidiary/Department/Class + SPLY/YTD/common-size columns, plus per-account confidence, sensitivity, and labelled assumptions) |
 
 Supporting material the routine does **not** call is kept **locally in `Week1/working/`** (a dev set,
@@ -79,8 +84,8 @@ Worked example: a run on **5 Jul 2026** → current = **Jun 2026**, prior = **Ma
 | 1b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → `curr_id`, `prior_id` |
 | 2 | The calc | **NetSuite** `ns_runSavedSearch(<SAVED_SEARCH_ID>)`, paged | — (the saved search *is* the calc) | → rows **per (subsidiary, account)**, already non-zero, with Subsidiary/Account Internal IDs, Classification, Department/Class, Periodic + YTD columns, `Difference` |
 | 3 | Tolerance filter | **Bash** | `ns_flux_sql.flag_reviews(rows, <ABS>, <PCT>)` | → `(review_rows, ok_count)`; gate runs on `Month - 1/2 Periodic`; each review_row carries prior_amt/current_amt/variance_abs/variance_pct/direction + **ytd_amount/prior_ytd_amount** (from the search) + its subsidiary & account ids |
-| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr,prior],<BOOK>,subsidiary_ids=[sub_ids],with_grounding=True,top_n=5)` | flagged ids → a SuiteQL string; grounding adds memos/dimensions on the top drivers |
-| 4b | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → driver rows with **subsidiary_id** + memos; the caller matches each to its row by (subsidiary_id, account_id) |
+| 4a | Build driver query | **Bash** | `ns_flux_sql.drivers_by_id_sql([acct_ids],[curr,prior],<BOOK>,subsidiary_ids=[sub_ids],with_grounding=True)` | flagged ids → a SuiteQL string; grounding adds memos/dimensions |
+| 4b | Run it + cap | **NetSuite** `ns_runCustomSuiteQL` → **Bash** `top_drivers(rows, 8)` | (executes that string, then caps to the N largest per account/period in code) | → driver rows with **subsidiary_id** + memos; the caller matches each to its row by (subsidiary_id, account_id) |
 | 4c | Build history query | **Bash** | `ns_flux_sql.account_history_sql([acct_ids],[trailing+SPLY+YTD ids],<BOOK>,subsidiary_ids=[sub_ids])` | flagged ids → a SuiteQL string (trailing `<HISTORY_MONTHS>` + SPLY + YTD months) |
 | 4d | Run it | **NetSuite** `ns_runCustomSuiteQL` | (executes that string) | → one pre-aggregated row per (account, period) |
 | 4e | Compute facts | **Bash** | `trend_facts` (recurrence + SPLY) · `common_size_by_classification` (BS/IS base) · `confidence_score` · `sensitivity` | → attach SPLY/trend/common-size/confidence/sensitivity to each review_row — **all in code, no model**. (YTD already came from the search at step 3, so no `period_total` pull is needed.) |
@@ -110,9 +115,13 @@ else is committed Python.
   `period_total` — recurrence, consecutive months, SPLY, YTD, trailing average). Use no other number;
   name only vendors present in the drivers; if no driver explains the swing (e.g. journals with no
   vendor, or the swing sits in the prior period) write *"driver not determinable from current
-  transactions — refer to <prior period> journals"* — do **not** invent a cause. Put any reference
-  that contains digits (a `tranid`, a journal id like `JE164589`) in `notes`, **not** in the
-  narrative — the eval treats stray digits as invented figures.
+  transactions — refer to <prior period> journals"* — do **not** invent a cause, but this is a **last
+  resort** now (no driver in either period AND no memo). Prefer to **cite the specific source**: the
+  narrative *may* name a pulled `tranid` / journal id (`JE164589`) / bill label / **memo**, passed to
+  the eval as `allowed_refs` (tranids **and** the cited memos — a memo like "2026 Q1 Current tax"
+  carries a year) so its digits aren't read as an invented figure. Decompose multi-vendor moves with
+  `vendor_bridge` ("new vendor B +X, vendor A −Y, net Z"). The account is shown by its **full name
+  only** (no Classification/Type suffix).
 - **Grounded reasons vs assumptions (step 5).** The *why* must come from a pulled **memo /
   description / dimension** (driver grounding) or from the trend facts (e.g. "third consecutive
   month", "first time in 12 months"). Operational context that is **not** in NetSuite (a sales
@@ -136,8 +145,8 @@ A trial balance is mostly flat, so the biggest cost is pulling rows you don't ne
   criteria on the difference); tighten it with an absolute floor if you want even fewer. For the
   SuiteQL fallback use `flux_sql(..., review_only=True)`. Discard flat rows on arrival regardless.
 - **Pre-aggregate drivers** (step 4) — the AI sees a few ranked rows, never raw transaction lines.
-  Grounding (memos/dimensions) rides only on the **`top_n`** largest drivers, and the history pull is
-  **one row per period** — both are deliberately small.
+  Grounding (memos/dimensions) rides only on the **`top_drivers`** largest rows, and the history pull
+  is **one row per period** — both are deliberately small.
 - **Assemble the email in code** (`build_email`) — no hand-written HTML in tool calls.
 - **Cheapest model that meets the bar** for the explain step (Haiku-class).
 - The deterministic steps cost **zero** model tokens — keep them in code.

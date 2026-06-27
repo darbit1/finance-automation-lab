@@ -134,12 +134,14 @@ ORDER BY a.acctnumber, t.postingperiod, ABS(SUM(tal.amount)) DESC
 
 def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
                       accounting_book: int = 1, subsidiary_ids: Sequence[int] = None,
-                      with_grounding: bool = False, top_n: int = None) -> str:
+                      with_grounding: bool = False) -> str:
     """
     Drivers for the saved-search flow, where the search returns account INTERNAL IDs and groups
     per (subsidiary, account). Single book. Includes tranid so a reviewer / the AI can spot test or
     one-off postings, and emits subsidiary_id so the caller can match each driver row back to a
-    flagged (subsidiary, account) row.
+    flagged (subsidiary, account) row. Rows come pre-sorted by ABS(amount) within (account, period);
+    cap them to the material few with top_drivers() in Python (SuiteQL window functions over a
+    nested SELECT * proved unreliable on NetSuite, so the cap is done in code).
 
     Pass subsidiary_ids (the flagged rows' Subsidiary Internal IDs) to scope the pull to those
     entities. The account_ids x subsidiary_ids IN-lists may over-pull cross pairs; the caller drops
@@ -147,11 +149,7 @@ def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
 
     with_grounding=True adds qualitative context for richer (still-auditable) narratives: the
     transaction memo + the line memo/department/class/location (via transactionline). These are the
-    'why' the AI may cite; figures stay number-checked. It fragments rows (one per memo/dimension),
-    so pair it with top_n.
-
-    top_n caps the rows returned per (account, period) to the N largest by ABS(amount), via a
-    window function - so memos are exposed only on the material drivers, not every line (token saver).
+    'why' the AI may cite; figures stay number-checked.
     """
     sub_filter = f"\n  AND t.subsidiary IN ({_csv(subsidiary_ids)})" if subsidiary_ids else ""
     if with_grounding:
@@ -163,7 +161,7 @@ def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
                        "BUILTIN.DF(tl.class), BUILTIN.DF(tl.location)")
     else:
         join_extra = select_extra = group_extra = ""
-    inner = f"""
+    return f"""
 SELECT a.id, a.fullname AS account, t.postingperiod AS period_id,
        t.subsidiary AS subsidiary_id, BUILTIN.DF(t.subsidiary) AS subsidiary,
        t.type AS txn_type, t.tranid, BUILTIN.DF(t.entity) AS entity,
@@ -177,17 +175,21 @@ WHERE t.posting = 'T'
   AND t.postingperiod IN ({_csv(period_ids)}){sub_filter}
 GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity){group_extra}
 ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC""".strip()
-    if top_n:
-        # Keep only the N largest drivers per (account, period); memos travel on those rows only.
-        return f"""
-SELECT * FROM (
-  SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.id, d.period_id ORDER BY ABS(d.amount) DESC) AS rn
-  FROM (
-{inner}
-  ) d
-) WHERE rn <= {int(top_n)}
-ORDER BY id, period_id, ABS(amount) DESC""".strip()
-    return inner
+
+
+def top_drivers(driver_rows, n: int = 8, account_key: str = "id", period_key: str = "period_id"):
+    """Keep only the N largest drivers (by ABS(amount)) per (account, period) - so the grounded
+    memos ride on the material rows, not every line. Done in code (portable; no SuiteQL window).
+    Preserves input order within a group beyond the sort key being abs(amount) desc."""
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for r in driver_rows:
+        groups[(str(r.get(account_key)), str(r.get(period_key)))].append(r)
+    out = []
+    for rows in groups.values():
+        rows = sorted(rows, key=lambda r: abs(_to_float(r.get("amount"))), reverse=True)
+        out.extend(rows[:n])
+    return out
 
 
 def account_history_sql(account_ids: Sequence[int], period_ids: Sequence[int],
@@ -364,6 +366,57 @@ def period_total(history_rows, account_id: int, period_ids: Sequence[int],
     return round(total, 2)
 
 
+def vendor_bridge(drivers, account_id: int, current_period_id: int, prior_period_id: int,
+                  subsidiary_id: int = None, unchanged_tol: float = 0.005):
+    """
+    Decompose one account's period-over-period movement BY VENDOR (deterministic). For each entity that
+    posted to the account in either period, compare its prior-period total to its current-period total
+    and classify the change. The AI never does this arithmetic - it just narrates the result.
+
+    Answers the "same account, mix of vendors" case, e.g. Apr: vendor A EUR 100k -> May: vendor A
+    EUR 50k + new vendor B EUR 75k, becomes:
+      [{entity: 'Vendor B', prior: 0, current: 75000, delta: 75000, status: 'new'},
+       {entity: 'Vendor A', prior: 100000, current: 50000, delta: -50000, status: 'decreased'}]
+    (sorted by |delta|; net of the deltas = the account's variance).
+
+    Rows with no entity (journals) are bucketed under their tranid (e.g. 'JE164589') so journal-only
+    swings are still itemised. Pass drivers from drivers_by_id_sql for [current, prior]; filter to one
+    account (and subsidiary, if the pull spanned several). status: new | dropped | increased |
+    decreased | unchanged.
+    """
+    cur, pri = {}, {}
+    for d in drivers:
+        if _to_int(d.get("id") if d.get("id") is not None else d.get("account_id")) != account_id:
+            continue
+        if subsidiary_id is not None and _to_int(d.get("subsidiary_id")) != subsidiary_id:
+            continue
+        key = (d.get("entity") or "").strip() or f"(journal {d.get('tranid') or 'n/a'})"
+        pid = _to_int(d.get("period_id"))
+        amt = _to_float(d.get("amount"))
+        if pid == current_period_id:
+            cur[key] = cur.get(key, 0.0) + amt
+        elif pid == prior_period_id:
+            pri[key] = pri.get(key, 0.0) + amt
+
+    bridge = []
+    for entity in set(cur) | set(pri):
+        c, p = round(cur.get(entity, 0.0), 2), round(pri.get(entity, 0.0), 2)
+        delta = round(c - p, 2)
+        if p == 0 and c != 0:
+            status = "new"
+        elif c == 0 and p != 0:
+            status = "dropped"
+        elif abs(delta) <= unchanged_tol:
+            status = "unchanged"
+        elif delta > 0:
+            status = "increased"
+        else:
+            status = "decreased"
+        bridge.append({"entity": entity, "prior": p, "current": c, "delta": delta, "status": status})
+    bridge.sort(key=lambda b: abs(b["delta"]), reverse=True)
+    return bridge
+
+
 def common_size(rows, base: float, amount_key: str = "current_amt", out_key: str = "common_size_pct"):
     """Express each row's amount as a fraction of a base (revenue for a P&L line, total assets for a
     BS line). Deterministic - the common-size % is computed here, never by the AI. base == 0 -> None.
@@ -451,6 +504,6 @@ if __name__ == "__main__":
     print("\n---\n")
     print(drivers_sql("<SUBSIDIARY>", [0, 0], ["<ACCT1>", "<ACCT2>"]))
     print("\n---\n")
-    print(drivers_by_id_sql([0, 0], [0, 0], with_grounding=True, top_n=5))
+    print(drivers_by_id_sql([0, 0], [0, 0], with_grounding=True))
     print("\n---\n")
     print(account_history_sql([0, 0], [0, 0], by_entity=True))

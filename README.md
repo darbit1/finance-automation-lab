@@ -26,6 +26,7 @@ transactions, and produce a report + email draft — without an LLM ever touchin
 | Tolerance / materiality flag | **Code** (`ns_flux_sql.flag_reviews`) | Versioned + unit-tested, not buried in a formula |
 | Filter to the flagged accounts | **Code** | A filter, not a judgement |
 | Pull + pre-aggregate driver transactions (+ memos/dimensions) | **SuiteQL `GROUP BY`** | Auditable retrieval |
+| Decompose the movement by vendor (new / dropped / increased / decreased) | **Code** (`vendor_bridge`) | The arithmetic of "who moved" is deterministic |
 | Trend / recurrence / SPLY / YTD / common-size / confidence / sensitivity | **Code** | Comparison facts are computed, never asserted by the AI |
 | Explain each movement in plain English | **AI** | The only AI step |
 | Verify every number + vendor in the explanation | **Code (the eval)** | The audit seam |
@@ -61,7 +62,7 @@ narrative is never shipped.
 
 ### Tests
 
-The runtime modules are covered by 36 tests kept in the local `Week1/working/` dev set
+The runtime modules are covered by 44 tests kept in the local `Week1/working/` dev set
 (`test_flux.py`, `test_ns_flux_eval.py`, `test_ns_flux_pipeline.py`). They add `Week1/` to the path
 and run from `Week1/working/`.
 

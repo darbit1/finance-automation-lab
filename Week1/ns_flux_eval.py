@@ -48,6 +48,17 @@ def _strip_dates(text: str) -> str:
     return text
 
 
+def _strip_refs(text: str, refs) -> str:
+    """Remove whitelisted transaction references (tranids, journal ids, bill names like 'JE164589' or
+    'IS TEST TRIAL BALANCE 1') BEFORE number extraction, so a narrative may cite the exact source
+    document without its digits being mistaken for an invented figure. Only references that came from
+    the pulled drivers are passed in, so this never lets a fabricated number through - the digits it
+    removes belong to a real, named source. Longest-first so a ref is not partly shadowed by another."""
+    for ref in sorted({str(r).strip() for r in (refs or []) if str(r).strip()}, key=len, reverse=True):
+        text = re.sub(re.escape(ref), " ", text, flags=re.IGNORECASE)
+    return text
+
+
 def _add_number(vals: set, v) -> None:
     """Add a value in both money (2dp) and percentage (4dp) forms, plus absolutes, so a token is
     accepted whether it reads as '22,000' or '44%'."""
@@ -97,16 +108,18 @@ def allowed_entities(drivers) -> set:
 
 
 def check_explanation(narrative, fact, drivers, money_tol: float = 1.0, pct_tol: float = 0.001,
-                      extra_facts=None):
+                      extra_facts=None, allowed_refs=None):
     """
     True only if every number traces to the facts/drivers (or the code-computed extra_facts) AND
     every company-like name is one of the pulled drivers. Otherwise False plus the offending tokens.
 
-    extra_facts: trend/SPLY/YTD/sensitivity figures from ns_flux_sql, so grounded comparison numbers
-    pass while invented ones are still rejected.
+    extra_facts: trend/SPLY/YTD/sensitivity figures + vendor_bridge deltas from ns_flux_sql, so
+    grounded comparison numbers pass while invented ones are still rejected.
+    allowed_refs: transaction references pulled from the drivers (tranids, journal ids, bill names) the
+    narrative is allowed to cite; their digits are stripped before the number check.
     """
     allowed = allowed_numbers(fact, drivers, extra_facts)
-    clean = _strip_dates(narrative)
+    clean = _strip_refs(_strip_dates(narrative), allowed_refs)
 
     bad_numbers = []
     for token, value in extract_numbers(clean):
