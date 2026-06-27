@@ -13,6 +13,14 @@ Set per run (from the Routine config): `<SAVED_SEARCH_ID>` (the trial-balance se
 `<ACCOUNTING_BOOK>` (default 1), `<ABS_THRESHOLD>`/`<PCT_THRESHOLD>` (25000 / 0.10), `<RECIPIENT>`,
 `<HISTORY_MONTHS>` (default 12).
 
+**Setup — make the modules importable (do this before any Python).** The committed modules live in the
+repo's `Week1/` directory and the repo root is your initial working directory. Either run helpers from
+the repo root with `PYTHONPATH=Week1 python <script>`, or begin every script with
+`import sys; sys.path.insert(0, "Week1")`. If you write a helper into a scratchpad/temp folder, that
+relative path won't resolve — use the **absolute** repo path: `sys.path.insert(0, "<repo_root>/Week1")`
+(get `<repo_root>` from `pwd` at the start). Sanity-check first, from the repo root:
+`python -c "import sys; sys.path.insert(0,'Week1'); import ns_flux_sql, ns_flux_eval, ns_flux_report; print('modules ok')"`.
+
 ---
 
 ## Steps
