@@ -80,3 +80,7 @@ traces to source" check. For Audit-Committee material — the audience that most
 that check is the whole point, and it is exactly what this build keeps in code. (For a supported path
 to drive this from Claude on-platform, 2026.1 also ships the **AI Connector Service** for NetSuite
 Analytics Warehouse.)
+
+A fuller **four-way comparison** — this build vs full-AI vs embedded EPM vs embedded EPM-AI, with a
+capability matrix and cost-benefit — is in
+[Week1/flux_approaches_comparison.md](Week1/flux_approaches_comparison.md).
