@@ -2,83 +2,96 @@
 
 A decision aid for *how* to run a monthly flux (variance) review on NetSuite. The same job — detect
 material account movements, explain them, report to finance — can be delivered four ways. They differ
-most in **who produces the numbers** and **whether anything verifies them**, which is the axis that
-matters when the audience is an Audit or Finance Committee.
+most in **who produces the numbers**, **whether anything verifies them**, and **where the AI runs**.
 
-> All figures below are qualitative bands (Low / Med / High) or structure, not quotes. NetSuite EPM
-> and its GenAI features are separately licensed and priced by negotiation; treat license cost as
-> "quote-based, typically significant" rather than a number.
+> All cost figures are qualitative bands (Low / Med / High), not quotes. NetSuite EPM, its GenAI
+> features, and OCI Generative AI overage are priced by negotiation/metering; treat license cost as
+> "quote-based" rather than a number.
 
 ## The four approaches
 
-1. **This build — Python calc + AI description.** NetSuite saved search computes the variance; committed
-   Python applies the tolerance gate, pulls grounded drivers, and computes every comparison fact
-   (trend, SPLY, YTD, common-size, confidence, sensitivity, vendor bridge). The LLM writes *only* the
-   prose; a deterministic eval verifies every figure and vendor before anything ships. Orchestrated by
-   a scheduled Claude Routine → Gmail draft. *AI drafts, code checks, human approves.*
-2. **Full AI.** A single rich prompt to an LLM via the AI Connector / MCP, pointed at the File Cabinet
-   reports (or live data). The model reads the statements and *produces the entire report* — numbers,
+1. **This build — external Python calc + Claude narrative.** A NetSuite saved search computes the
+   variance; committed, unit-tested Python applies the tolerance gate, pulls grounded drivers, and
+   computes every comparison fact (trend, SPLY, YTD, common-size, confidence, sensitivity, vendor
+   bridge). A frontier **Claude** model writes *only* the prose; a deterministic eval verifies every
+   figure and vendor before anything ships. Orchestrated by a scheduled Claude Routine → Gmail draft.
+   *AI drafts, code checks, human approves.*
+2. **Full AI.** One rich prompt to an LLM (via the AI Connector / MCP) pointed at the File Cabinet
+   reports or live data. The model reads the statements and *produces the whole report* — numbers,
    ratios, sensitivity, confidence, narrative — in one pass. No deterministic recompute or check.
-3. **Embedded NetSuite EPM (non-AI).** Native NetSuite: Account Reconciliation, Financial Report
-   Builder variance columns, saved-search materiality flags, KPI/SuiteAnalytics. Deterministic, mature,
-   supported — but the **explanation is written by a human analyst** (no narrative automation).
-4. **Embedded NetSuite AI (2026.1 GenAI Flux Analysis).** Native GenAI in EPM Account Reconciliation:
-   detect material fluctuations by configurable threshold and auto-draft a plain-language narrative;
-   the Autonomous Close *flux monitor* adds root-cause diagnosis. Vendor-built and vendor-maintained.
+3. **Embedded NetSuite EPM.** The EPM suite (Account Reconciliation, Financial Report Builder variance
+   columns, Narrative Insights) — including the **2026.1 GenAI Flux Analysis** that detects by
+   configurable threshold and auto-drafts a narrative, plus the Autonomous Close *flux monitor*.
+   Vendor-built and vendor-maintained; separately licensed.
+4. **Embedded NetSuite AI via SuiteScript (`N/llm`).** Build the solution *entirely inside NetSuite*:
+   a Scheduled SuiteScript computes the variance in SuiteQL, then calls the embedded **`N/llm`** module
+   (`llm.generateText` / Prompt Studio, with optional RAG + citations) to draft each narrative, and
+   emails/stores the result. The LLM runs on **Oracle Cloud Infrastructure (OCI) Generative AI**
+   (default **Cohere Command R**; Llama-class also), with a **monthly free-call quota** per account
+   (bring-your-own OCI credentials for unlimited, metered). This is the closest sibling to approach 1
+   — deterministic calc + LLM narrative — but in-platform and on OCI-tier models.
 
 ## Capability comparison
 
-| Dimension | 1. This build (Python + AI) | 2. Full AI | 3. NetSuite EPM (non-AI) | 4. NetSuite AI (GenAI flux) |
+| Dimension | 1. This build (Python + Claude) | 2. Full AI | 3. Embedded EPM | 4. Embedded SuiteScript `N/llm` |
 |---|---|---|---|---|
-| Who computes the numbers | NetSuite + Python | **the LLM** | NetSuite (native) | NetSuite (native) |
-| Number integrity ("AI never alters a figure") | **Guaranteed** (eval withholds) | None | Guaranteed (no AI) | Vendor-asserted, not exposed |
-| Deterministic verification of the narrative | **Yes** (number + provenance eval) | No | n/a (human writes it) | No published check |
-| Reproducibility (same input → same output) | **High** | Low (varies per run) | High | Med (model nondeterminism) |
-| Narrative explanations | Automated, grounded in memos/journals/vendors | Automated, ungrounded | **Manual** (analyst time) | Automated |
-| Driver grounding (memos, vendor bridge, tranids) | **Deep** (pulled + cited) | Whatever the model infers | Manual drill-down | Model-dependent, opaque |
-| Threshold / control ownership | **You** (versioned, unit-tested code) | Prompt-only, fuzzy | You (native config) | Configurable, vendor logic |
-| Customization (calc line-by-line, data sources) | **Full** | Prompt-limited | Med (within EPM) | Low (black box) |
-| Multi-period / SPLY / YTD / common-size | Yes (computed) | Yes (asserted) | Yes (native) | Yes |
-| Cross-subsidiary + multi-book correctness | **Enforced in SQL** | Error-prone | Native | Native |
-| Audit trail / maker-checker | **Yes** (draft-never-send + eval log) | No | Partial (native workflow) | Partial |
-| Breadth/polish out of the box (5-section board deck) | Med (extensible) | **High** | Med | Med-High |
-| Data freshness | Live (SuiteQL) | Snapshot reports or live | Live | Live |
+| Who computes the numbers | NetSuite + Python | **the LLM** | NetSuite (native) | **NetSuite (your SuiteScript/SuiteQL)** |
+| Number integrity ("AI never alters a figure") | **Guaranteed** (eval withholds) | None | Native calc (AI narrates) | Calc deterministic; **eval is DIY** in SuiteScript |
+| Deterministic verification of the narrative | **Yes** (number + provenance eval) | No | No published check | Only if you build it |
+| Reproducibility | **High** | Low | Med (calc high, model varies) | Med (calc high, model varies) |
+| Narrative quality | **Frontier Claude** | Frontier-class | Vendor model | **OCI Cohere/Llama-class** (lower) |
+| Driver grounding (memos, vendor bridge, tranids) | **Deep, cited** | Model-inferred | Opaque | Yes (pass drivers; RAG gives citations) |
+| Threshold / control ownership | **You** (versioned, tested code) | Prompt-only | Configurable, vendor logic | **You** (SuiteScript) |
+| Customization (calc, data, model) | **Full** (any model) | Prompt-limited | Low (black box) | Full calc; **model limited to OCI catalog** |
+| Where data / AI runs | External (NetSuite→Claude API) | External | In NetSuite | **Fully in NetSuite + OCI** (data residency) |
+| Multi-period / SPLY / YTD / common-size | Yes (computed) | Yes (asserted) | Yes (native) | Yes (you compute) |
+| Cross-subsidiary + multi-book correctness | **Enforced in SQL** | Error-prone | Native | **Enforced in your SQL** |
+| Audit trail / maker-checker | **Yes** | No | Partial (native workflow) | DIY + native exec logs |
+| Engineering hygiene (git, unit tests) | **High** (44 tests) | None | n/a | Low (SuiteScript; harder to test/version) |
+| Breadth/polish out of the box | Med (extensible) | **High** | Med-High | Med (you build) |
 
 ## Cost-benefit
 
-| Factor | 1. This build | 2. Full AI | 3. NetSuite EPM (non-AI) | 4. NetSuite AI |
+| Factor | 1. This build | 2. Full AI | 3. Embedded EPM | 4. SuiteScript `N/llm` |
 |---|---|---|---|---|
-| Build / setup effort | **High** (one-time dev) | **Low** (write a prompt) | Med-High (impl. + config) | Low (if already on EPM) |
-| Time to first value | Days-weeks | Hours | Weeks-months | Days |
-| Licensing / prerequisites | Existing NetSuite + Claude sub; **no new license** | Claude sub / AI Connector | **EPM module (quote-based, significant)** | EPM **+** GenAI entitlement; regional limits |
-| Per-run compute cost | **Low** (small tables, Haiku-class; deterministic steps = 0 tokens) | **High** (full statements in context, every run) | None (compute) | Bundled in license |
-| Maintenance owner & burden | You / engineering (it's code + tests) | You (prompt drift) | Vendor + admin | **Vendor** |
-| Error / rework risk (hidden cost) | **Low** (verified) | **High** (silent wrong numbers → re-checking) | Low | Med (black-box trust) |
-| Vendor lock-in / portability | **Low** (stdlib Python; swap orchestrator) | Low-Med | High (EPM) | High (EPM + AI) |
-| Scales to more entities/accounts | High (just more rows) | Degrades (context limit, cost) | High | High |
-| Upgrade/feature roadmap | You own it | Model upgrades | NetSuite releases | NetSuite releases |
+| Build / setup effort | High (one-time dev) | **Low** (a prompt) | Med-High (impl./config) | High (SuiteScript dev) |
+| Time to first value | Days-weeks | Hours | Weeks-months | Days-weeks |
+| Licensing / prerequisites | Existing NetSuite + Claude sub; **no new license** | Claude / AI Connector | **EPM module (quote-based, significant)** | **Included** in NetSuite (free LLM quota); BYO-OCI beyond it; regional limits |
+| Per-run compute cost | **Low** (small tables; deterministic = 0 tokens) | **High** (full statements each run) | Bundled in license | **Low** within quota, then OCI-metered |
+| Maintenance owner | Engineering (code + tests) | You (prompt drift) | **Vendor** + admin | NetSuite admin/dev (SuiteScript) |
+| Error / rework risk (hidden cost) | **Low** (verified) | **High** (silent wrong numbers) | Low-Med (black-box trust) | Med (no default eval; weaker model) |
+| Vendor lock-in / portability | **Low** (stdlib Python; swap orchestrator/model) | Low-Med | High (EPM) | **High** (SuiteScript + OCI; NetSuite-only) |
+| Data residency / governance | Data leaves to Claude API | Data leaves | In-platform | **Strongest — stays in Oracle/NetSuite + OCI** |
+| Scales to more entities/accounts | High | Degrades (context, cost) | High | High (but 5 concurrent LLM calls) |
 
 ## When each one wins
 
-- **This build** — when the output must be **trusted, repeatable, and audit-defensible**, you want to
-  own the calculation and thresholds line-by-line, and you're not paying for EPM. Best fit for the
-  Audit/Finance-Committee deliverable. Cost is the upfront engineering; payoff is verified numbers and
-  near-zero per-run cost.
-- **Full AI** — a **fast first draft / exploration** that a human will re-check anyway, or one-off ad
-  hoc analysis. Cheapest to stand up; most expensive in trust and rework. Do not ship its numbers
-  unchecked to a board.
-- **NetSuite EPM (non-AI)** — you're **already licensed for EPM** and accept that analysts write the
-  narratives. Mature, supported, deterministic; the cost is the license and the manual write-up time.
-- **NetSuite AI (GenAI flux)** — you're **on EPM, the thresholds fit, and you accept a black box**. Least
-  effort, vendor-maintained; you give up control of the calculation and an exposed "every figure
-  traces to source" check.
+- **This build (1)** — output must be **trusted, repeatable, audit-defensible**; you want the best
+  narrative model, to own thresholds line-by-line, a ready-made deterministic eval, and proper
+  software engineering (git, tests, portability), without paying for EPM. Best fit for the
+  Audit/Finance-Committee deliverable.
+- **Full AI (2)** — a **fast first draft / one-off exploration** a human will re-check. Cheapest to
+  stand up, most expensive in trust and rework. Don't ship its numbers unchecked to a board.
+- **Embedded EPM (3)** — you're **already licensed for EPM** and its native thresholds/black-box
+  narrative satisfy your auditors. Least effort if on EPM; you give up calc control and an exposed
+  "every figure traces to source" check.
+- **SuiteScript `N/llm` (4)** — you want **everything inside NetSuite**: no external connectors,
+  strongest **data residency**, native scheduling, and AI cost bundled in the free quota. Accept
+  **OCI-tier models** (Cohere/Llama, below frontier Claude) and that you must **build the verification
+  layer yourself** in SuiteScript. The natural choice for a NetSuite-only shop that values in-platform
+  governance over model quality and tooling.
 
 ## Recommendation
 
-The honest synthesis: **buy the native EPM AI if you're already on EPM and its thresholds satisfy your
-auditors; otherwise this build is the better foundation** — it reaches the same board-ready richness
-(common-size, sensitivity, confidence, cash-flow/equity sections are all *computable*) while keeping
-every number deterministic and every sentence verified, at near-zero per-run cost and no new license.
-"Full AI" is a drafting tool, not a control. The differentiator no native or one-shot option advertises
-is the deterministic **"the AI never changed a number"** check — and that is exactly what the
-Audit-Committee audience these reports target most needs.
+Approaches **1 and 4 are the same idea — deterministic calc + LLM narrative — and the real choice is
+where it runs and how good the guardrails are.** Pick **4 (SuiteScript `N/llm`)** if in-platform data
+residency and zero external moving parts outweigh everything else, and you're willing to accept a
+weaker model and to hand-build the number/provenance check. Pick **1 (this build)** when you want the
+**best narrative model, a ready deterministic eval, and engineered controls (versioned, unit-tested,
+portable)** — the same in-NetSuite calculation, but with a stronger writer and a proven audit seam.
+
+Buy **EPM (3)** if you're already on it and its thresholds fit; use **Full AI (2)** only as a drafting
+tool, never as a control. Across all four, the differentiator this build keeps is the deterministic
+**"the AI never changed a number"** check — EPM and one-shot AI don't expose it, and the SuiteScript
+route only has it if you build it. For the Audit-Committee audience these reports target, that check is
+the whole point.
