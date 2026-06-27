@@ -48,8 +48,25 @@ def _strip_dates(text: str) -> str:
     return text
 
 
-def allowed_numbers(fact, drivers) -> set:
-    """Every number the narrative may legitimately contain."""
+def _add_number(vals: set, v) -> None:
+    """Add a value in both money (2dp) and percentage (4dp) forms, plus absolutes, so a token is
+    accepted whether it reads as '22,000' or '44%'."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return
+    for n in (round(x, 2), round(abs(x), 2), round(x, 4), round(abs(x), 4)):
+        vals.add(n)
+
+
+def allowed_numbers(fact, drivers, extra_facts=None) -> set:
+    """Every number the narrative may legitimately contain.
+
+    extra_facts widens the allowlist to the deterministically-computed comparison figures the AI is
+    allowed to cite - trend_facts (trailing_avg, sply_amount, vs_sply_pct, consecutive_months, ...),
+    a YTD total, a sensitivity figure. Pass a dict (values used) or a flat list of numbers. Only
+    figures CODE computed reach here, so 'recurring / SPLY / expected to normalise' stays grounded.
+    """
     f = fact.to_dict() if hasattr(fact, "to_dict") else dict(fact)
     vals = set()
     # Accept either the engine's keys (prior/current) or the report's (prior_amt/current_amt).
@@ -67,6 +84,10 @@ def allowed_numbers(fact, drivers) -> set:
             vals.add(round(abs(float(d["amount"])), 2))
         if d.get("lines") is not None:
             vals.add(float(d["lines"]))           # e.g. "702 journals", "2 vendor bills"
+    if extra_facts:
+        items = extra_facts.values() if hasattr(extra_facts, "values") else extra_facts
+        for v in items:
+            _add_number(vals, v)
     return vals
 
 
@@ -75,12 +96,16 @@ def allowed_entities(drivers) -> set:
     return {(d.get("entity") or "").strip().lower() for d in drivers if d.get("entity")}
 
 
-def check_explanation(narrative, fact, drivers, money_tol: float = 1.0, pct_tol: float = 0.001):
+def check_explanation(narrative, fact, drivers, money_tol: float = 1.0, pct_tol: float = 0.001,
+                      extra_facts=None):
     """
-    True only if every number traces to the facts/drivers AND every company-like name is one
-    of the pulled drivers. Otherwise False plus the offending tokens.
+    True only if every number traces to the facts/drivers (or the code-computed extra_facts) AND
+    every company-like name is one of the pulled drivers. Otherwise False plus the offending tokens.
+
+    extra_facts: trend/SPLY/YTD/sensitivity figures from ns_flux_sql, so grounded comparison numbers
+    pass while invented ones are still rejected.
     """
-    allowed = allowed_numbers(fact, drivers)
+    allowed = allowed_numbers(fact, drivers, extra_facts)
     clean = _strip_dates(narrative)
 
     bad_numbers = []

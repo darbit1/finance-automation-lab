@@ -14,6 +14,11 @@ from typing import Sequence
 # Income-statement account types (P&L flux). Drop this filter for a full trial-balance flux.
 PL_TYPES = ("Income", "COGS", "Expense", "OthIncome", "OthExpense")
 
+# Account-type groupings for the common-size bases (NetSuite acct types).
+REVENUE_TYPES = ("Income", "OthIncome")
+ASSET_TYPES = ("Bank", "AcctRec", "OthCurrAsset", "FixedAsset", "OthAsset",
+               "DeferExpense", "UnbilledRec", "InvtAsset")
+
 
 def _q(s: str) -> str:
     """Single-quote escape for SuiteQL string literals."""
@@ -29,7 +34,12 @@ def _types_csv(types: Sequence[str]) -> str:
 
 
 def period_lookup_sql(*period_names: str) -> str:
-    """Resolve posting-period names to internal IDs (saved search uses names, SuiteQL uses IDs)."""
+    """Resolve posting-period names to internal IDs (saved search uses names, SuiteQL uses IDs).
+
+    Accepts the whole comparison set in one call - current, prior, same-period-last-year, and the
+    YTD months - so a single lookup feeds the multi-period enrichments. The caller keeps the
+    name->id map and passes the ids on to account_history_sql / trend_facts / period_total.
+    """
     names = ", ".join(f"'{_q(n)}'" for n in period_names)
     return f"SELECT id, periodname FROM accountingperiod WHERE periodname IN ({names})"
 
@@ -42,6 +52,10 @@ def flux_sql(subsidiary: str, curr_id: int, prior_id: int,
     Per-account current/prior/variance/% + direction + within_tolerance flag.
     Identical logic to the saved-search formulas; use it to validate the saved search and as
     the pipeline's calc source until the saved search exists.
+
+    Periodic, not cumulative: current_amt/prior_amt each SUM tal.amount within ONE posting period,
+    so each is that period's activity (the rebuilt saved search is also periodic-over-periodic).
+    That makes this fallback a 1:1 cross-check of the saved search's Month-1/Month-2 columns.
 
     accounting_book defaults to 1 (primary). transactionaccountingline holds one row per book,
     so WITHOUT this filter a multi-book account is summed across books and the variance is
@@ -119,7 +133,8 @@ ORDER BY a.acctnumber, t.postingperiod, ABS(SUM(tal.amount)) DESC
 
 
 def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
-                      accounting_book: int = 1, subsidiary_ids: Sequence[int] = None) -> str:
+                      accounting_book: int = 1, subsidiary_ids: Sequence[int] = None,
+                      with_grounding: bool = False, top_n: int = None) -> str:
     """
     Drivers for the saved-search flow, where the search returns account INTERNAL IDs and groups
     per (subsidiary, account). Single book. Includes tranid so a reviewer / the AI can spot test or
@@ -129,12 +144,71 @@ def drivers_by_id_sql(account_ids: Sequence[int], period_ids: Sequence[int],
     Pass subsidiary_ids (the flagged rows' Subsidiary Internal IDs) to scope the pull to those
     entities. The account_ids x subsidiary_ids IN-lists may over-pull cross pairs; the caller drops
     the extras by matching on (subsidiary_id, account_id).
+
+    with_grounding=True adds qualitative context for richer (still-auditable) narratives: the
+    transaction memo + the line memo/department/class/location (via transactionline). These are the
+    'why' the AI may cite; figures stay number-checked. It fragments rows (one per memo/dimension),
+    so pair it with top_n.
+
+    top_n caps the rows returned per (account, period) to the N largest by ABS(amount), via a
+    window function - so memos are exposed only on the material drivers, not every line (token saver).
     """
     sub_filter = f"\n  AND t.subsidiary IN ({_csv(subsidiary_ids)})" if subsidiary_ids else ""
-    return f"""
+    if with_grounding:
+        join_extra = "\nJOIN transactionline tl ON tl.transaction = tal.transaction AND tl.id = tal.transactionline"
+        select_extra = (",\n       t.memo AS txn_memo, tl.memo AS line_memo,\n"
+                        "       BUILTIN.DF(tl.department) AS department, "
+                        "BUILTIN.DF(tl.class) AS class, BUILTIN.DF(tl.location) AS location")
+        group_extra = (", t.memo, tl.memo, BUILTIN.DF(tl.department), "
+                       "BUILTIN.DF(tl.class), BUILTIN.DF(tl.location)")
+    else:
+        join_extra = select_extra = group_extra = ""
+    inner = f"""
 SELECT a.id, a.fullname AS account, t.postingperiod AS period_id,
        t.subsidiary AS subsidiary_id, BUILTIN.DF(t.subsidiary) AS subsidiary,
        t.type AS txn_type, t.tranid, BUILTIN.DF(t.entity) AS entity,
+       COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount{select_extra}
+FROM transactionaccountingline tal
+JOIN transaction t ON t.id = tal.transaction
+JOIN account a ON a.id = tal.account{join_extra}
+WHERE t.posting = 'T'
+  AND tal.accountingbook = {accounting_book}
+  AND tal.account IN ({_csv(account_ids)})
+  AND t.postingperiod IN ({_csv(period_ids)}){sub_filter}
+GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity){group_extra}
+ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC""".strip()
+    if top_n:
+        # Keep only the N largest drivers per (account, period); memos travel on those rows only.
+        return f"""
+SELECT * FROM (
+  SELECT d.*, ROW_NUMBER() OVER (PARTITION BY d.id, d.period_id ORDER BY ABS(d.amount) DESC) AS rn
+  FROM (
+{inner}
+  ) d
+) WHERE rn <= {int(top_n)}
+ORDER BY id, period_id, ABS(amount) DESC""".strip()
+    return inner
+
+
+def account_history_sql(account_ids: Sequence[int], period_ids: Sequence[int],
+                        accounting_book: int = 1, subsidiary_ids: Sequence[int] = None,
+                        by_entity: bool = False) -> str:
+    """
+    Trailing history for the flagged accounts: one PRE-AGGREGATED row per
+    (account, period[, subsidiary[, entity]]) total, over the trailing periods passed (e.g. the
+    last 12 months plus the same-period-last-year period). This is the 'compare more data' source -
+    it lets trend_facts() decide recurrence / 'first time in N months' / SPLY comparison in code,
+    so the AI never infers a trend itself. One row per period (not per transaction) => cheap.
+
+    by_entity=True groups by vendor too, so trend_facts can see whether one vendor recurs across
+    periods ('all invoices for the same vendor'). Single book; optional subsidiary scope.
+    """
+    sub_filter = f"\n  AND t.subsidiary IN ({_csv(subsidiary_ids)})" if subsidiary_ids else ""
+    ent_select = ", BUILTIN.DF(t.entity) AS entity" if by_entity else ""
+    ent_group = ", BUILTIN.DF(t.entity)" if by_entity else ""
+    return f"""
+SELECT a.id, a.fullname AS account, t.postingperiod AS period_id,
+       t.subsidiary AS subsidiary_id{ent_select},
        COUNT(*) AS lines, ROUND(SUM(tal.amount),2) AS amount
 FROM transactionaccountingline tal
 JOIN transaction t ON t.id = tal.transaction
@@ -143,15 +217,15 @@ WHERE t.posting = 'T'
   AND tal.accountingbook = {accounting_book}
   AND tal.account IN ({_csv(account_ids)})
   AND t.postingperiod IN ({_csv(period_ids)}){sub_filter}
-GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary, BUILTIN.DF(t.subsidiary), t.type, t.tranid, BUILTIN.DF(t.entity)
-ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC
+GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary{ent_group}
+ORDER BY a.id, t.postingperiod
 """.strip()
 
 
-# --- Tolerance gate (row processing, not SQL) --------------------------------
+# --- Tolerance gate + derived facts (row processing, not SQL) -----------------
 # The saved-search flow applies the gate in code (the search returns the difference but no flag).
-# Keeping it here - tested and version-controlled - means every deterministic step is committed
-# code, not authored ad-hoc each run.
+# Keeping these here - tested and version-controlled - means every deterministic step is committed
+# code, not authored ad-hoc each run. The model never runs any of them.
 
 def _to_float(v) -> float:
     """Parse a saved-search numeric cell ('1,234.5', '-50', '', None) to float."""
@@ -159,6 +233,17 @@ def _to_float(v) -> float:
         return 0.0
     s = str(v).strip().replace(",", "")
     return float(s) if s not in ("", "-") else 0.0
+
+
+def _to_int(v):
+    """Parse an internal-id cell to int (None when blank/non-numeric)."""
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", "")
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
 
 
 def variance_metrics(prior: float, current: float) -> dict:
@@ -190,21 +275,174 @@ def is_review(prior: float, current: float,
 
 
 def flag_reviews(rows, abs_threshold: float = 25000.0, pct_threshold: float = 0.10,
-                 current_key: str = "Month - 1", prior_key: str = "Month - 2"):
+                 current_key: str = "Month - 1 Periodic", prior_key: str = "Month - 2 Periodic",
+                 curr_ytd_key: str = "Month - 1 YTD", prior_ytd_key: str = "Month - 2 YTD"):
     """Apply the tolerance gate to parsed saved-search rows (dicts; numeric cells may be strings).
     Returns (review_rows, ok_count). Each review_row is the original dict plus prior_amt,
     current_amt, variance_abs, variance_pct, direction. The model never runs this - it is the
-    deterministic 'what gets flagged' step."""
+    deterministic 'what gets flagged' step.
+
+    The gate runs on the PERIODIC columns (the month's activity), matching the saved search's
+    Difference = Month-1 Periodic - Month-2 Periodic. When the YTD columns are present they are
+    captured too (ytd_amount / prior_ytd_amount), so the report shows YTD straight from the search -
+    no extra SuiteQL needed."""
     reviews, ok_count = [], 0
     for row in rows:
         prior = _to_float(row.get(prior_key))
         current = _to_float(row.get(current_key))
         if is_review(prior, current, abs_threshold, pct_threshold):
-            reviews.append({**row, "prior_amt": prior, "current_amt": current,
-                            **variance_metrics(prior, current)})
+            rec = {**row, "prior_amt": prior, "current_amt": current,
+                   **variance_metrics(prior, current)}
+            if curr_ytd_key in row or prior_ytd_key in row:
+                rec["ytd_amount"] = _to_float(row.get(curr_ytd_key))
+                rec["prior_ytd_amount"] = _to_float(row.get(prior_ytd_key))
+            reviews.append(rec)
         else:
             ok_count += 1
     return reviews, ok_count
+
+
+def trend_facts(history_rows, account_id: int, ordered_period_ids: Sequence[int],
+                subsidiary_id: int = None, sply_period_id: int = None,
+                recurring_min: int = 3) -> dict:
+    """
+    Deterministic trend signals for one account from its trailing history (account_history_sql rows).
+    ordered_period_ids is the trailing window OLDEST->NEWEST. The AI may only assert recurrence /
+    'first time' / 'expected to normalise' / SPLY claims that match these facts - it never infers a
+    trend on its own.
+
+    Returns: periods_present (non-zero periods in the window), consecutive_months (run of non-zero
+    periods ending at the newest), is_recurring (present in >= recurring_min periods), trailing_avg
+    (mean of the non-zero period totals), sply_amount (same-period-last-year total, or None),
+    vs_sply_pct (newest period vs SPLY, or None).
+    """
+    amt = {}
+    for r in history_rows:
+        if _to_int(r.get("id") if r.get("id") is not None else r.get("account_id")) != account_id:
+            continue
+        if subsidiary_id is not None and _to_int(r.get("subsidiary_id")) != subsidiary_id:
+            continue
+        pid = _to_int(r.get("period_id"))
+        if pid is None:
+            continue
+        amt[pid] = amt.get(pid, 0.0) + _to_float(r.get("amount"))
+
+    series = [round(amt.get(pid, 0.0), 2) for pid in ordered_period_ids]
+    nonzero = [v for v in series if abs(v) > 0]
+    periods_present = len(nonzero)
+
+    consecutive = 0
+    for v in reversed(series):
+        if abs(v) > 0:
+            consecutive += 1
+        else:
+            break
+
+    trailing_avg = round(sum(nonzero) / len(nonzero), 2) if nonzero else 0.0
+    sply_amount = round(amt[sply_period_id], 2) if (sply_period_id in amt) else None
+    current = series[-1] if series else 0.0
+    vs_sply_pct = round((current - sply_amount) / abs(sply_amount), 4) if sply_amount else None
+
+    return {"periods_present": periods_present, "consecutive_months": consecutive,
+            "is_recurring": periods_present >= recurring_min, "trailing_avg": trailing_avg,
+            "sply_amount": sply_amount, "vs_sply_pct": vs_sply_pct}
+
+
+def period_total(history_rows, account_id: int, period_ids: Sequence[int],
+                 subsidiary_id: int = None) -> float:
+    """Sum one account's history-row amounts across a set of periods - the deterministic YTD (pass the
+    fiscal-year-to-date period ids) or prior-year-YTD total. Same row shape as account_history_sql."""
+    wanted = {int(p) for p in period_ids}
+    total = 0.0
+    for r in history_rows:
+        if _to_int(r.get("id") if r.get("id") is not None else r.get("account_id")) != account_id:
+            continue
+        if subsidiary_id is not None and _to_int(r.get("subsidiary_id")) != subsidiary_id:
+            continue
+        if _to_int(r.get("period_id")) in wanted:
+            total += _to_float(r.get("amount"))
+    return round(total, 2)
+
+
+def common_size(rows, base: float, amount_key: str = "current_amt", out_key: str = "common_size_pct"):
+    """Express each row's amount as a fraction of a base (revenue for a P&L line, total assets for a
+    BS line). Deterministic - the common-size % is computed here, never by the AI. base == 0 -> None.
+    Returns new dicts with out_key added."""
+    b = _to_float(base)
+    out = []
+    for r in rows:
+        v = _to_float(r.get(amount_key))
+        out.append({**r, out_key: (None if b == 0 else round(v / abs(b), 4))})
+    return out
+
+
+def common_size_by_classification(review_rows, all_rows,
+                                  classification_key: str = "Classification",
+                                  accttype_key: str = "Account Type"):
+    """Add common_size_pct per flagged row using its Classification (BS/IS) to pick the base,
+    summed from the FULL saved-search result (all_rows):
+      IS line -> share of total revenue (periodic, current month: 'Month - 1 Periodic')
+      BS line -> share of total assets  (balance, current month: 'Month - 1 YTD')
+    Convention-based - flip the measures/types here if your house style differs. Deterministic;
+    the AI never computes a common-size %."""
+    rev_base = sum(_to_float(r.get("Month - 1 Periodic")) for r in all_rows
+                   if r.get(accttype_key) in REVENUE_TYPES)
+    asset_base = sum(_to_float(r.get("Month - 1 YTD")) for r in all_rows
+                     if r.get(accttype_key) in ASSET_TYPES)
+    out = []
+    for r in review_rows:
+        cls = (r.get(classification_key) or "").strip().upper()
+        if cls.startswith("IS"):
+            base, amt = rev_base, _to_float(r.get("Month - 1 Periodic"))
+        elif cls.startswith("BS"):
+            base, amt = asset_base, _to_float(r.get("Month - 1 YTD"))
+        else:
+            base, amt = 0.0, 0.0
+        out.append({**r, "common_size_pct": (None if base == 0 else round(amt / abs(base), 4))})
+    return out
+
+
+def confidence_score(review_row, drivers, trend: dict = None,
+                     strong: float = 0.80, weak: float = 0.50) -> dict:
+    """
+    Deterministic data-completeness rating for one flagged account - NOT an LLM guess.
+
+    coverage = |sum of the provided current-period driver amounts| / |variance| : how much of the
+    swing is explained by named drivers. has_context = any driver carries a memo. comparable = a
+    trend with SPLY or recurrence is available. Levels: high (well-covered AND we have context or a
+    comparison), low (poorly covered and nothing else), medium otherwise.
+    """
+    base = abs(_to_float(review_row.get("variance_abs"))) or abs(_to_float(review_row.get("current_amt")))
+    explained = sum(abs(_to_float(d.get("amount"))) for d in drivers)
+    coverage = None if base == 0 else round(min(explained / base, 1.0), 4)
+    has_context = any((d.get("txn_memo") or d.get("line_memo")) for d in drivers)
+    comparable = bool(trend and (trend.get("sply_amount") is not None or trend.get("is_recurring")))
+
+    cov = coverage or 0.0
+    if cov >= strong and (has_context or comparable):
+        level, reason = "high", "drivers explain the swing and memo/comparison context is available"
+    elif cov < weak and not (has_context or comparable):
+        level, reason = "low", "drivers explain little of the swing and no memo/comparison context"
+    else:
+        level, reason = "medium", "partial coverage or limited context"
+    return {"level": level, "reason": reason, "coverage": coverage,
+            "has_context": has_context, "comparable": comparable}
+
+
+def sensitivity(review_row, pct: float = 0.05,
+                abs_threshold: float = 25000.0, pct_threshold: float = 0.10) -> dict:
+    """
+    Deterministic +/-pct sensitivity on the current-period figure: how the variance moves and whether
+    the REVIEW flag survives a downside shift. A flag that holds at -pct is a robust finding; one that
+    flips is borderline. Computed, not asserted by the AI.
+    """
+    prior = _to_float(review_row.get("prior_amt"))
+    current = _to_float(review_row.get("current_amt"))
+    up, down = current * (1 + pct), current * (1 - pct)
+    return {"pct": pct,
+            "variance_up": round(up - prior, 2),
+            "variance_down": round(down - prior, 2),
+            "flag_holds_down": is_review(prior, down, abs_threshold, pct_threshold)}
 
 
 if __name__ == "__main__":
@@ -212,3 +450,7 @@ if __name__ == "__main__":
     print(flux_sql("<SUBSIDIARY>", 0, 0, 25000, 0.10))
     print("\n---\n")
     print(drivers_sql("<SUBSIDIARY>", [0, 0], ["<ACCT1>", "<ACCT2>"]))
+    print("\n---\n")
+    print(drivers_by_id_sql([0, 0], [0, 0], with_grounding=True, top_n=5))
+    print("\n---\n")
+    print(account_history_sql([0, 0], [0, 0], by_entity=True))

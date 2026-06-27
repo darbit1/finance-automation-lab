@@ -20,8 +20,29 @@ def _pct(p):
     return "n/a" if p is None else f"{p*100:+.1f}%"
 
 
+def _cs(p):
+    """Common-size %, unsigned (a share of a base, not a movement)."""
+    return "n/a" if p is None else f"{p*100:.1f}%"
+
+
 def _run_at(meta):
     return meta.get("run_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _enrich_text(r, ccy):
+    """Deterministic per-account suffix (confidence + sensitivity). These are CODE-computed
+    (ns_flux_sql.confidence_score / sensitivity), not AI text, so they are report chrome - not
+    subject to the narrative eval. Returns '' when neither is present."""
+    parts = []
+    c = r.get("confidence")
+    if c:
+        parts.append(f"Confidence: {c['level']}" + (f" - {c['reason']}" if c.get("reason") else ""))
+    s = r.get("sensitivity")
+    if s:
+        held = "yes" if s.get("flag_holds_down") else "no"
+        parts.append(f"Sensitivity (±{s['pct']*100:.0f}%): variance {_money(s['variance_down'], ccy)} to "
+                     f"{_money(s['variance_up'], ccy)}; flag holds at downside: {held}")
+    return " | ".join(parts)
 
 
 def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
@@ -49,14 +70,25 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
              f"Narratives passing the number/provenance check: {verified}/{flagged}.")
     L.append("")
     show_sub = any(r.get("subsidiary") for r in review_rows)
-    cols = (["Subsidiary"] if show_sub else []) + ["Account", "Prior", "Current", "Variance", "%", "Direction"]
-    aligns = (["---"] if show_sub else []) + ["---", "--:", "--:", "--:", "--:", ":--"]
+    show_sply = any(r.get("sply_amount") is not None for r in review_rows)
+    show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
+    show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
+    cols = (["Subsidiary"] if show_sub else []) + ["Account", "Prior", "Current"] \
+        + (["SPLY"] if show_sply else []) + (["YTD"] if show_ytd else []) \
+        + ["Variance", "%"] + (["% of base"] if show_cs else []) + ["Direction"]
+    aligns = (["---"] if show_sub else []) + ["---", "--:", "--:"] \
+        + (["--:"] if show_sply else []) + (["--:"] if show_ytd else []) \
+        + ["--:", "--:"] + (["--:"] if show_cs else []) + [":--"]
     L.append("| " + " | ".join(cols) + " |")
     L.append("|" + "|".join(aligns) + "|")
     for r in review_rows:
-        cells = ([r.get("subsidiary", "")] if show_sub else []) + [
-            r["account"], _money(r["prior_amt"], ccy), _money(r["current_amt"], ccy),
-            _money(r["variance_abs"], ccy), _pct(r["variance_pct"]), r["direction"]]
+        cells = ([r.get("subsidiary", "")] if show_sub else []) \
+            + [r["account"], _money(r["prior_amt"], ccy), _money(r["current_amt"], ccy)] \
+            + ([_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"] if show_sply else []) \
+            + ([_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"] if show_ytd else []) \
+            + [_money(r["variance_abs"], ccy), _pct(r["variance_pct"])] \
+            + ([_cs(r.get("common_size_pct"))] if show_cs else []) \
+            + [r["direction"]]
         L.append("| " + " | ".join(str(c) for c in cells) + " |")
     L.append("")
     L.append("## Explanations")
@@ -68,11 +100,18 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
         L.append(f"### {head}")
         if r.get("eval_ok"):
             L.append(r["narrative"])
+            enrich = _enrich_text(r, ccy)
+            if enrich:
+                L.append("")
+                L.append(f"*{enrich}*")
         else:
             L.append(f"> **Withheld - failed verification.** The drafted explanation contained a "
                      f"figure or vendor not traceable to the source transactions and was not shipped. "
                      f"Variance: {_money(r['variance_abs'], ccy)} ({_pct(r['variance_pct'])}). "
                      f"Manual review required.")
+        for a in (r.get("assumptions") or []):
+            L.append("")
+            L.append(f"> **Assumption (unverified).** {a}")
         L.append("")
     for n in (notes or []):
         L.append(f"> **Reviewer note.** {n}")
@@ -106,20 +145,31 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
              f'{ok_count} within tolerance. Narratives passing the number/provenance check: '
              f'<strong>{verified}/{flagged}</strong>.</p>')
     show_sub = any(r.get("subsidiary") for r in review_rows)
+    show_sply = any(r.get("sply_amount") is not None for r in review_rows)
+    show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
+    show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
     sub_th = f'<th style="text-align:left;{cell}">Subsidiary</th>' if show_sub else ''
+    sply_th = f'<th style="{rcell}">SPLY</th>' if show_sply else ''
+    ytd_th = f'<th style="{rcell}">YTD</th>' if show_ytd else ''
+    cs_th = f'<th style="{rcell}">% of base</th>' if show_cs else ''
     H.append('<table style="border-collapse:collapse;font-size:13px;width:100%"><thead>'
              '<tr style="background:#f3f4f6">'
              f'{sub_th}<th style="text-align:left;{cell}">Account</th><th style="{rcell}">Prior</th>'
-             f'<th style="{rcell}">Current</th><th style="{rcell}">Variance</th>'
-             f'<th style="{rcell}">%</th><th style="text-align:left;{cell}">Direction</th></tr></thead><tbody>')
+             f'<th style="{rcell}">Current</th>{sply_th}{ytd_th}<th style="{rcell}">Variance</th>'
+             f'<th style="{rcell}">%</th>{cs_th}<th style="text-align:left;{cell}">Direction</th></tr></thead><tbody>')
     for i, r in enumerate(review_rows):
         bg = ' style="background:#fafafa"' if i % 2 else ''
         sub_td = f'<td style="{cell}">{e(str(r.get("subsidiary", "")))}</td>' if show_sub else ''
+        sply_td = (f'<td style="{rcell}">{_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"}</td>'
+                   if show_sply else '')
+        ytd_td = (f'<td style="{rcell}">{_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"}</td>'
+                  if show_ytd else '')
+        cs_td = f'<td style="{rcell}">{_cs(r.get("common_size_pct"))}</td>' if show_cs else ''
         H.append(f'<tr{bg}>{sub_td}<td style="{cell}">{e(str(r["account"]))}</td>'
                  f'<td style="{rcell}">{_money(r["prior_amt"], ccy)}</td>'
-                 f'<td style="{rcell}">{_money(r["current_amt"], ccy)}</td>'
+                 f'<td style="{rcell}">{_money(r["current_amt"], ccy)}</td>{sply_td}{ytd_td}'
                  f'<td style="{rcell}">{_money(r["variance_abs"], ccy)}</td>'
-                 f'<td style="{rcell}">{_pct(r["variance_pct"])}</td>'
+                 f'<td style="{rcell}">{_pct(r["variance_pct"])}</td>{cs_td}'
                  f'<td style="{cell}">{e(str(r["direction"]))}</td></tr>')
     H.append('</tbody></table>')
     H.append('<h3 style="margin:18px 0 4px">Explanations</h3>')
@@ -129,14 +179,20 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
     for r in review_rows:
         label = f'{r["subsidiary"]} - {r["account"]}' if (show_sub and r.get("subsidiary")) else r["account"]
         if r.get("eval_ok"):
+            enrich = _enrich_text(r, ccy)
+            enrich_html = (f'<br><span style="color:#666;font-size:12px">{e(enrich)}</span>' if enrich else '')
             H.append(f'<p style="font-size:13px;margin:0 0 10px"><strong>{e(str(label))}.</strong> '
-                     f'{e(str(r["narrative"]))}</p>')
+                     f'{e(str(r["narrative"]))}{enrich_html}</p>')
         else:
             H.append(f'<p style="font-size:13px;background:#fef2f2;border:1px solid #fecaca;padding:8px 10px;'
                      f'border-radius:4px;margin:6px 0 10px"><strong>{e(str(label))} - withheld, failed '
                      f'verification.</strong> The drafted explanation contained a figure or vendor not traceable '
                      f'to source and was not shipped. Variance: {_money(r["variance_abs"], ccy)} '
                      f'({_pct(r["variance_pct"])}). Manual review required.</p>')
+        for a in (r.get("assumptions") or []):
+            H.append(f'<p style="font-size:12px;background:#fff7ed;border:1px solid #fed7aa;padding:7px 10px;'
+                     f'border-radius:4px;margin:4px 0 10px"><strong>Assumption (unverified).</strong> '
+                     f'{e(str(a))}</p>')
     for n in (notes or []):
         H.append(f'<p style="font-size:13px;background:#fff7ed;border:1px solid #fed7aa;padding:8px 10px;'
                  f'border-radius:4px;margin:6px 0 12px"><strong>Reviewer note.</strong> {e(str(n))}</p>')
@@ -165,8 +221,13 @@ if __name__ == "__main__":
                 currency="EUR", run_at="2026-01-01 09:00 UTC")
     rows = [
         dict(account="Legal consultancy", prior_amt=0, current_amt=379310, variance_abs=379310,
-             variance_pct=None, direction="new",
+             variance_pct=None, direction="new", sply_amount=0, ytd_amount=379310,
+             common_size_pct=0.12,
              narrative="New this period at EUR 379,310, driven by 2 vendor bills from Acme Legal Ltd.",
+             confidence=dict(level="high", reason="drivers explain the swing and memo context is available",
+                             coverage=0.97),
+             sensitivity=dict(pct=0.05, variance_up=398276, variance_down=360345, flag_holds_down=True),
+             assumptions=["One-off M&A advisory; expected to normalise next quarter (per controller)."],
              eval_ok=True),
         dict(account="Suspense", prior_amt=10000, current_amt=90000, variance_abs=80000,
              variance_pct=8.0, direction="increase",
