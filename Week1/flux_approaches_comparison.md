@@ -29,7 +29,9 @@ most in **who produces the numbers**, **whether anything verifies them**, and **
    emails/stores the result. The LLM runs on **Oracle Cloud Infrastructure (OCI) Generative AI**
    (default **Cohere Command R**; Llama-class also), with a **monthly free-call quota** per account
    (bring-your-own OCI credentials for unlimited, metered). This is the closest sibling to approach 1
-   — deterministic calc + LLM narrative — but in-platform and on OCI-tier models.
+   — deterministic calc + LLM narrative — but in-platform and on OCI-tier models. **A working
+   implementation of this approach is built in [suitescript-flux/](suitescript-flux/)** (SDF project:
+   SuiteQL calc + the ported audit seam + `N/llm` narrative + a scheduled script), with deploy steps.
 
 ## Capability comparison
 

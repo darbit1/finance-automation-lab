@@ -1,0 +1,13 @@
+<scheduledscript scriptid="customscript_flux_review">
+  <name>Flux Review (SuiteScript + N/llm)</name>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/flux/flux_scheduled.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_flux_review">
+      <title>Flux Review - Monthly</title>
+      <isdeployed>T</isdeployed>
+      <loglevel>AUDIT</loglevel>
+      <status>NOTSCHEDULED</status>
+    </scriptdeployment>
+  </scriptdeployments>
+</scheduledscript>
