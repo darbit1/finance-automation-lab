@@ -445,9 +445,13 @@ def common_size_by_classification(review_rows, all_rows,
     out = []
     for r in review_rows:
         cls = (r.get(classification_key) or "").strip().upper()
-        if cls.startswith("IS"):
+        # The saved search returns 'Income Statement' / 'Balance Sheet'; also accept the 'IS'/'BS'
+        # short codes and 'P&L'.
+        is_pl = cls.startswith("IS") or "INCOME" in cls or "P&L" in cls or "PROFIT" in cls
+        is_bs = cls.startswith("BS") or "BALANCE" in cls
+        if is_pl:
             base, amt = rev_base, _to_float(r.get("Month - 1 Periodic"))
-        elif cls.startswith("BS"):
+        elif is_bs:
             base, amt = asset_base, _to_float(r.get("Month - 1 YTD"))
         else:
             base, amt = 0.0, 0.0
