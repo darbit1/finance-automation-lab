@@ -25,6 +25,13 @@ def _cs(p):
     return "n/a" if p is None else f"{p*100:.1f}%"
 
 
+def _dim(v):
+    """Clean a dimension cell (Department/Class). NetSuite returns '-None-' / '- None -' / '0' for
+    'no value'; treat those as blank so an all-blank dimension doesn't render a column of '-None-'."""
+    s = ("" if v is None else str(v)).strip()
+    return "" if s.replace(" ", "").lower() in ("", "-none-", "none", "0") else s
+
+
 def _run_at(meta):
     return meta.get("run_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -70,8 +77,8 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
              f"Narratives passing the number/provenance check: {verified}/{flagged}.")
     L.append("")
     show_sub = any(r.get("subsidiary") for r in review_rows)
-    show_dept = any(r.get("Department") for r in review_rows)
-    show_class = any(r.get("Class") for r in review_rows)
+    show_dept = any(_dim(r.get("Department")) for r in review_rows)
+    show_class = any(_dim(r.get("Class")) for r in review_rows)
     show_sply = any(r.get("sply_amount") is not None for r in review_rows)
     show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
     show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
@@ -89,7 +96,7 @@ def build_report(meta: dict, review_rows: list, ok_count: int, notes=None) -> st
     L.append("|" + "|".join(aligns) + "|")
     for r in review_rows:
         cells = ([r.get("subsidiary", "")] if show_sub else []) + [r["account"]] \
-            + ([r.get("Department", "")] if show_dept else []) + ([r.get("Class", "")] if show_class else []) \
+            + ([_dim(r.get("Department"))] if show_dept else []) + ([_dim(r.get("Class"))] if show_class else []) \
             + [_money(r["prior_amt"], ccy), _money(r["current_amt"], ccy)] \
             + ([_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"] if show_sply else []) \
             + ([_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"] if show_ytd else []) \
@@ -152,8 +159,8 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
              f'{ok_count} within tolerance. Narratives passing the number/provenance check: '
              f'<strong>{verified}/{flagged}</strong>.</p>')
     show_sub = any(r.get("subsidiary") for r in review_rows)
-    show_dept = any(r.get("Department") for r in review_rows)
-    show_class = any(r.get("Class") for r in review_rows)
+    show_dept = any(_dim(r.get("Department")) for r in review_rows)
+    show_class = any(_dim(r.get("Class")) for r in review_rows)
     show_sply = any(r.get("sply_amount") is not None for r in review_rows)
     show_ytd = any(r.get("ytd_amount") is not None for r in review_rows)
     show_cs = any(r.get("common_size_pct") is not None for r in review_rows)
@@ -171,8 +178,8 @@ def build_html(meta: dict, review_rows: list, ok_count: int, notes=None) -> str:
     for i, r in enumerate(review_rows):
         bg = ' style="background:#fafafa"' if i % 2 else ''
         sub_td = f'<td style="{cell}">{e(str(r.get("subsidiary", "")))}</td>' if show_sub else ''
-        dept_td = f'<td style="{cell}">{e(str(r.get("Department", "")))}</td>' if show_dept else ''
-        class_td = f'<td style="{cell}">{e(str(r.get("Class", "")))}</td>' if show_class else ''
+        dept_td = f'<td style="{cell}">{e(_dim(r.get("Department")))}</td>' if show_dept else ''
+        class_td = f'<td style="{cell}">{e(_dim(r.get("Class")))}</td>' if show_class else ''
         sply_td = (f'<td style="{rcell}">{_money(r["sply_amount"], ccy) if r.get("sply_amount") is not None else "n/a"}</td>'
                    if show_sply else '')
         ytd_td = (f'<td style="{rcell}">{_money(r["ytd_amount"], ccy) if r.get("ytd_amount") is not None else "n/a"}</td>'
