@@ -55,6 +55,10 @@ overridden at deploy time with a **Script Parameter** of the matching id (`custs
 `custscript_flux_folder`, `custscript_flux_model`) — the script reads the parameter and falls back to
 the config default, so it runs either way.
 
+> **Want the click-by-click version?** A detailed walkthrough — feature toggles, an `N/llm` pre-flight
+> check, both deploy paths, a full testing section, and a troubleshooting table — is in
+> [DEPLOY.md](DEPLOY.md). The summary below is the quick path.
+
 ## Deploy — Option A: SuiteCloud CLI (recommended)
 
 From `Week1/suitescript-flux/`:
