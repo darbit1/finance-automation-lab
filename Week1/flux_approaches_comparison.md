@@ -29,17 +29,18 @@ most in **who produces the numbers**, **whether anything verifies them**, and **
    emails/stores the result. The LLM runs on **Oracle Cloud Infrastructure (OCI) Generative AI**
    (default **Cohere Command R**; Llama-class also), with a **monthly free-call quota** per account
    (bring-your-own OCI credentials for unlimited, metered). This is the closest sibling to approach 1
-   — deterministic calc + LLM narrative — but in-platform and on OCI-tier models. **A working
-   implementation of this approach is built in [suitescript-flux/](suitescript-flux/)** (SDF project:
-   SuiteQL calc + the ported audit seam + `N/llm` narrative + a scheduled script), with deploy steps.
+   — deterministic calc + LLM narrative — but in-platform and on OCI-tier models. **Built and run
+   live** in [suitescript-flux/](suitescript-flux/) (SDF project: SuiteQL calc + the ported audit seam
+   + `N/llm` narrative + scheduled script). A May-vs-Apr sandbox run flagged 15 accounts and verified
+   **15/15** — see *Field test* below.
 
 ## Capability comparison
 
 | Dimension | 1. This build (Python + Claude) | 2. Full AI | 3. Embedded EPM | 4. Embedded SuiteScript `N/llm` |
 |---|---|---|---|---|
 | Who computes the numbers | NetSuite + Python | **the LLM** | NetSuite (native) | **NetSuite (your SuiteScript/SuiteQL)** |
-| Number integrity ("AI never alters a figure") | **Guaranteed** (eval withholds) | None | Native calc (AI narrates) | Calc deterministic; **eval is DIY** in SuiteScript |
-| Deterministic verification of the narrative | **Yes** (number + provenance eval) | No | No published check | Only if you build it |
+| Number integrity ("AI never alters a figure") | **Guaranteed** (eval withholds) | None | Native calc (AI narrates) | **Guaranteed** — eval ported (this build) |
+| Deterministic verification of the narrative | **Yes** (number + provenance eval) | No | No published check | **Yes** — ported, 15/15 live |
 | Reproducibility | **High** | Low | Med (calc high, model varies) | Med (calc high, model varies) |
 | Narrative quality | **Frontier Claude** | Frontier-class | Vendor model | **OCI Cohere/Llama-class** (lower) |
 | Driver grounding (memos, vendor bridge, tranids) | **Deep, cited** | Model-inferred | Opaque | Yes (pass drivers; RAG gives citations) |
@@ -49,7 +50,7 @@ most in **who produces the numbers**, **whether anything verifies them**, and **
 | Multi-period / SPLY / YTD / common-size | Yes (computed) | Yes (asserted) | Yes (native) | Yes (you compute) |
 | Cross-subsidiary + multi-book correctness | **Enforced in SQL** | Error-prone | Native | **Enforced in your SQL** |
 | Audit trail / maker-checker | **Yes** | No | Partial (native workflow) | DIY + native exec logs |
-| Engineering hygiene (git, unit tests) | **High** (44 tests) | None | n/a | Low (SuiteScript; harder to test/version) |
+| Engineering hygiene (git, unit tests) | **High** (44 tests) | None | n/a | Med — SDF + **17 jest tests** (this build) |
 | Breadth/polish out of the box | Med (extensible) | **High** | Med-High | Med (you build) |
 
 ## Cost-benefit
@@ -61,10 +62,39 @@ most in **who produces the numbers**, **whether anything verifies them**, and **
 | Licensing / prerequisites | Existing NetSuite + Claude sub; **no new license** | Claude / AI Connector | **EPM module (quote-based, significant)** | **Included** in NetSuite (free LLM quota); BYO-OCI beyond it; regional limits |
 | Per-run compute cost | **Low** (small tables; deterministic = 0 tokens) | **High** (full statements each run) | Bundled in license | **Low** within quota, then OCI-metered |
 | Maintenance owner | Engineering (code + tests) | You (prompt drift) | **Vendor** + admin | NetSuite admin/dev (SuiteScript) |
-| Error / rework risk (hidden cost) | **Low** (verified) | **High** (silent wrong numbers) | Low-Med (black-box trust) | Med (no default eval; weaker model) |
+| Error / rework risk (hidden cost) | **Low** (verified) | **High** (silent wrong numbers) | Low-Med (black-box trust) | Low-Med (eval ported; weaker model may under-flag anomalies) |
 | Vendor lock-in / portability | **Low** (stdlib Python; swap orchestrator/model) | Low-Med | High (EPM) | **High** (SuiteScript + OCI; NetSuite-only) |
 | Data residency / governance | Data leaves to Claude API | Data leaves | In-platform | **Strongest — stays in Oracle/NetSuite + OCI** |
 | Scales to more entities/accounts | High | Degrades (context, cost) | High | High (but 5 concurrent LLM calls) |
+
+## Field test: option 1 vs option 4, same data (live)
+
+Both builds were run on the **same sandbox**, May vs Apr. They flagged the **same 15 accounts** and
+**both passed their audit seam 15/15** — confirming the headline claim: *the scaffolding (deterministic
+facts + the ported eval) makes even a free, in-platform OCI model trustworthy — it cannot ship a figure
+that doesn't trace to source.* Where they diverged:
+
+- **Judgment (frontier model wins).** On the €10,000,000 "Tax services" bill literally named
+  `IS TEST TRIAL BALANCE 1`, Claude (1) flagged it as *"almost certainly an erroneous or test entry —
+  withhold/reverse before close."* Cohere (4) reported it neutrally and even called the 76×-larger VAT
+  *"consistent with last year (EUR 33,369)"*. For an Audit-Committee deliverable, catching that anomaly
+  is the point — the stronger model earned its keep on **analysis**, not on number integrity (both were
+  clean there).
+- **Framing.** Claude framed the recurring CIT swings correctly (*"the absence of a new accrual, not a
+  payment; YTD unchanged"*); Cohere sometimes mis-framed them as a *"settlement."*
+- **Completeness / polish.** Claude listed all three AT journals; Cohere cited two of three, and once
+  leaked the internal term *"vendor bridge"* into the prose.
+- **Structure.** The Python build (1) surfaced **Department/Class + YTD columns, cross-account reviewer
+  notes, and assumptions**; the SuiteScript build (4) currently omits these (Dept/Class/YTD not wired
+  into its flux query; no note synthesis). These are **closable gaps, not architectural** — add the
+  columns to `flux_sql` and have the orchestrator synthesize notes.
+- **Cost / residency.** Option 4 ran **entirely in-platform on the free `N/llm` quota** — zero data
+  egress, near-zero marginal cost.
+
+**Takeaway:** the verification layer travels — a weaker, free, in-platform model produced audit-passing
+narratives once wrapped in the same deterministic scaffolding. The frontier model adds *judgment*
+(spotting the planted anomaly) and the external build adds *packaging*; neither changed the
+number-integrity guarantee, which held identically on both.
 
 ## When each one wins
 
@@ -78,19 +108,22 @@ most in **who produces the numbers**, **whether anything verifies them**, and **
   narrative satisfy your auditors. Least effort if on EPM; you give up calc control and an exposed
   "every figure traces to source" check.
 - **SuiteScript `N/llm` (4)** — you want **everything inside NetSuite**: no external connectors,
-  strongest **data residency**, native scheduling, and AI cost bundled in the free quota. Accept
-  **OCI-tier models** (Cohere/Llama, below frontier Claude) and that you must **build the verification
-  layer yourself** in SuiteScript. The natural choice for a NetSuite-only shop that values in-platform
-  governance over model quality and tooling.
+  strongest **data residency**, native scheduling, and AI cost bundled in the free quota. The
+  verification layer must live in SuiteScript — **done here** (ported, 15/15 live). Accept **OCI-tier
+  models** (Cohere/Llama): in the field test they were clean on numbers but **softer on judgment** (under-
+  flagged a planted anomaly). The natural choice for a NetSuite-only shop that values in-platform
+  governance and zero marginal cost over the sharpest narrative.
 
 ## Recommendation
 
-Approaches **1 and 4 are the same idea — deterministic calc + LLM narrative — and the real choice is
-where it runs and how good the guardrails are.** Pick **4 (SuiteScript `N/llm`)** if in-platform data
-residency and zero external moving parts outweigh everything else, and you're willing to accept a
-weaker model and to hand-build the number/provenance check. Pick **1 (this build)** when you want the
-**best narrative model, a ready deterministic eval, and engineered controls (versioned, unit-tested,
-portable)** — the same in-NetSuite calculation, but with a stronger writer and a proven audit seam.
+Approaches **1 and 4 are the same idea — deterministic calc + LLM narrative — and the live field test
+proved the real choice is the model's *judgment* and the *packaging*, not number integrity** (both
+verified 15/15). Pick **4 (SuiteScript `N/llm`)** if in-platform data residency and zero external moving
+parts outweigh everything else — the eval ports cleanly and the free OCI model is trustworthy on the
+numbers, just softer at spotting anomalies and lighter on structure. Pick **1 (this build)** when you
+want the **sharper analyst** (it caught the planted test-posting), richer board-ready packaging, and
+engineered controls (versioned, portable) — the same in-NetSuite calculation, but with a stronger
+writer and a proven audit seam.
 
 Buy **EPM (3)** if you're already on it and its thresholds fit; use **Full AI (2)** only as a drafting
 tool, never as a control. Across all four, the differentiator this build keeps is the deterministic
