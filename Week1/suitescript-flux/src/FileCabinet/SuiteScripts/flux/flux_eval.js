@@ -23,7 +23,9 @@ define([], function () {
     new RegExp('\\b(?:' + MONTHS + ')\\s+\\d{1,2}\\b', 'gi'),
     new RegExp('\\b(?:' + MONTHS + ')\\s+\\d{4}\\b', 'gi'),
     /\b\d{4}-\d{2}-\d{2}\b/g,
-    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g
+    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,
+    /\b\d{1,2}\.\d{1,2}\.\d{2,4}\b/g,   // dotted dd.mm.yyyy (NetSuite memos)
+    /\b(?:19|20)\d{2}\b/g               // a bare calendar year is a date, not a financial figure
   ];
 
   function normalise(token) {
@@ -89,10 +91,13 @@ define([], function () {
     return set;
   }
 
-  function allowedEntities(drivers) {
+  function allowedEntities(drivers, extra) {
     var set = {};
     (drivers || []).forEach(function (d) {
       if (d.entity) set[String(d.entity).trim().toLowerCase()] = true;
+    });
+    (extra || []).forEach(function (e) {
+      if (e) set[String(e).trim().toLowerCase()] = true;       // e.g. the row's own subsidiary
     });
     return set;
   }
@@ -111,12 +116,16 @@ define([], function () {
 
     var badNumbers = [];
     extractNumbers(clean).forEach(function (n) {
+      // Police MONETARY/percentage figures only. A bare 1-2 digit integer (no separator, no %) is a
+      // date fragment / ordinal / small count, never a material amount here (amounts are >= the 25k
+      // gate and comma/currency-formatted), so it is not treated as an invented figure.
+      if (/^\d{1,2}$/.test(n.token.trim())) return;
       var tol = (n.token.charAt(n.token.length - 1) === '%') ? pctTol : moneyTol;
       var ok = allowedList.some(function (a) { return Math.abs(n.value - a) <= tol; });
       if (!ok) badNumbers.push(n.token);
     });
 
-    var ents = allowedEntities(drivers);
+    var ents = allowedEntities(drivers, opts.extra_entities);
     var entKeys = Object.keys(ents);
     var badEntities = [], m;
     COMPANY_RE.lastIndex = 0;

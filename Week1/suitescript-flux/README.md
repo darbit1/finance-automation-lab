@@ -11,6 +11,35 @@ same right-size rule — **the model only writes prose; every figure is computed
 See [../flux_approaches_comparison.md](../flux_approaches_comparison.md) for the trade-offs (model
 quality, data residency, who builds the eval).
 
+> **Status: deployed and run live in a sandbox.** A May-vs-Apr run flagged 15 accounts, the embedded
+> `N/llm` model wrote all 15 narratives, and the audit seam verified **15/15** before the HTML report
+> was saved to the File Cabinet. See *Lessons from the live deploy* below for the NetSuite-specific
+> gotchas this surfaced (they're already fixed in the code here).
+
+## Lessons from the live deploy (already fixed in this code)
+
+`N/query.runSuiteQL` runs on the **SEARCH channel**, which is stricter than the REST/SuiteQL endpoint
+you might test with — two things bit us, both fixed in `flux_sql.js`:
+
+- **`FETCH FIRST n ROWS ONLY` is rejected.** Use an Oracle `ROWNUM` subquery, and re-sort the outer
+  query (`ORDER BY` outside the `ROWNUM` filter) so order is guaranteed.
+- **`transaction.subsidiary` is `NOT_EXPOSED` for SEARCH.** Read the subsidiary from
+  **`transactionline.subsidiary`** instead (join `transactionline`). Same for any other header field
+  that errors with `NOT_EXPOSED`.
+
+Email/sender realities (see *Known limits*):
+- `email.send` needs an **employee author whose record carries an email** — that becomes the From.
+  Your NetSuite **login email is not the same** as the employee record's Email field; if no employee
+  matches, NetSuite falls back to the System user (`-5`). Set `AUTHOR_EMPLOYEE_ID` (or put the email on
+  the employee record).
+- **Sandboxes commonly suppress/redirect outbound email.** The File Cabinet HTML copy is the reliable
+  artifact for sandbox testing; email sends normally in production.
+
+The eval was also tuned for the weaker OCI model (vs frontier Claude): it now allows the row's own
+**subsidiary** name, strips **vendor-code digits** inside whitelisted vendor names, ignores **bare
+1–2 digit date fragments**, and treats only monetary/percentage tokens as figures — without weakening
+the core guarantee (real amounts and vendors still must trace to source).
+
 ## What's here
 
 ```

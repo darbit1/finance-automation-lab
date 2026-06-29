@@ -56,6 +56,8 @@ define(['N/llm'], function (llm) {
       'say the next charge is expected at the next close - do NOT say the driver is undeterminable when',
       'a prior-period driver is shown. Only if NO driver appears in either period and there is no memo,',
       'write: "driver not determinable from current transactions - refer to prior-period journals".',
+      'Refer to vendors by name. Do NOT write calendar dates, numeric reference codes, or percentages',
+      'that are not in the facts, and do not restate the subsidiary name.',
       '',
       'FACTS:',
       facts.join('\n'),

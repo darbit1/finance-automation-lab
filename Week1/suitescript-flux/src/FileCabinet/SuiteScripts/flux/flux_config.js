@@ -23,9 +23,14 @@ define([], function () {
     // Cap drivers shown to the model per (account) - the material few, memos ride on these.
     TOP_DRIVERS: 8,
 
-    // Reviewer who receives the drafted report for approval (the human in "AI drafts, code checks,
-    // human approves"). NetSuite has no Gmail-style draft, so we email the reviewer + save a file.
+    // Who receives the report (the human in "AI drafts, code checks, human approves").
     REVIEWER_EMAIL: 'finance@darbit.nl',
+
+    // Sender: NetSuite email.send requires an EMPLOYEE author. Easiest is to set the employee's
+    // internal id directly here (find it on the employee record). If left blank, the script resolves
+    // AUTHOR_EMAIL to an employee id at run time (and logs candidates if it can't).
+    AUTHOR_EMPLOYEE_ID: '',
+    AUTHOR_EMAIL: 'ilia.shabrov@ridedott.com',
 
     // Internal id of the File Cabinet folder to write the report into (-1 = SuiteScripts default; set
     // a real folder id for production). The run still succeeds if the file write fails.

@@ -51,3 +51,29 @@ test('refs do not whitelist an unrelated invented figure', () => {
   expect(r.ok).toBe(false);
   expect(r.bad_numbers.some(t => t.indexOf('555,000') !== -1)).toBe(true);
 });
+
+test('the row subsidiary may be named (extra_entities), an unrelated company may not', () => {
+  const n = 'New at EUR 379,310 in Dott SAS, driven by 2 vendor bills from Acme Legal Ltd.';
+  expect(ev.checkExplanation(n, FACT, DRIVERS).ok).toBe(false);               // Dott SAS flagged
+  expect(ev.checkExplanation(n, FACT, DRIVERS, { extra_entities: ['FR - Dott SAS'] }).ok).toBe(true);
+});
+
+test('dotted dates and bare years are not read as figures', () => {
+  const n = 'New at EUR 379,310; the 2026 Q1 accrual posted 31.05.2026 by Acme Legal Ltd.';
+  expect(ev.checkExplanation(n, FACT, DRIVERS).ok).toBe(true);
+});
+
+test('bare 1-2 digit fragments (05, 31) are not policed as money, but real amounts still are', () => {
+  const ok = 'New at EUR 379,310 (memo Tax services_05.2025), posted 31 by Acme Legal Ltd.';
+  expect(ev.checkExplanation(ok, FACT, DRIVERS).ok).toBe(true);
+  const bad = 'New at EUR 379,310 plus an invented EUR 4,500.';   // 3+ digit money still caught
+  expect(ev.checkExplanation(bad, FACT, DRIVERS).ok).toBe(false);
+});
+
+test('vendor code inside a whitelisted vendor name does not trip the number check', () => {
+  const drivers = [{ entity: 'V02787 Satakerta Rodl Partner Oy', amount: 379310, lines: 1 }];
+  const n = 'New at EUR 379,310 from one bill by V02787 Satakerta Rodl Partner Oy.';
+  // pass the vendor display name as a ref so its embedded code (02787) is stripped before number-match
+  const r = ev.checkExplanation(n, FACT, drivers, { allowed_refs: ['V02787 Satakerta Rodl Partner Oy'] });
+  expect(r.ok).toBe(true);
+});

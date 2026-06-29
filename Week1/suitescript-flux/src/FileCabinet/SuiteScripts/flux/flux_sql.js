@@ -23,13 +23,17 @@ define([], function () {
    * takes [0]=current, [1]=prior, [0..HISTORY_MONTHS-1]=trailing, [HISTORY_MONTHS]=same-period-last-year.
    */
   function recentPeriodsSql() {
+    // SuiteQL rejects FETCH FIRST; use a ROWNUM subquery, and re-sort the outer query so the result
+    // is guaranteed newest-first ([0]=current). Column is isadjust (not isadjustment).
     return [
-      "SELECT id, periodname, enddate",
-      "FROM accountingperiod",
-      "WHERE isadjustment = 'F' AND isquarter = 'F' AND isyear = 'F'",
-      "  AND TRUNC(enddate) <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE), -1))",
-      "ORDER BY enddate DESC",
-      "FETCH FIRST 14 ROWS ONLY"
+      "SELECT id, periodname, enddate FROM (",
+      "  SELECT id, periodname, enddate",
+      "  FROM accountingperiod",
+      "  WHERE isadjust = 'F' AND isquarter = 'F' AND isyear = 'F'",
+      "    AND TRUNC(enddate) <= LAST_DAY(ADD_MONTHS(TRUNC(SYSDATE), -1))",
+      "  ORDER BY enddate DESC",
+      ") WHERE ROWNUM <= 14",
+      "ORDER BY enddate DESC"
     ].join('\n');
   }
 
@@ -40,18 +44,19 @@ define([], function () {
   function fluxSql(currId, priorId, book) {
     var types = PL_TYPES.map(function (t) { return "'" + t + "'"; }).join(', ');
     return [
-      "SELECT t.subsidiary AS subsidiary_id, BUILTIN.DF(t.subsidiary) AS subsidiary,",
+      "SELECT tl.subsidiary AS subsidiary_id, BUILTIN.DF(tl.subsidiary) AS subsidiary,",
       "       a.id AS account_id, a.fullname AS account, a.accttype AS accttype,",
       "       CASE WHEN a.accttype IN (" + types + ") THEN 'Income Statement' ELSE 'Balance Sheet' END AS classification,",
       "       NVL(SUM(CASE WHEN t.postingperiod = " + parseInt(currId, 10) + "  THEN tal.amount END), 0) AS current_amt,",
       "       NVL(SUM(CASE WHEN t.postingperiod = " + parseInt(priorId, 10) + " THEN tal.amount END), 0) AS prior_amt",
       "FROM transactionaccountingline tal",
       "JOIN transaction t ON t.id = tal.transaction",
+      "JOIN transactionline tl ON tl.transaction = tal.transaction AND tl.id = tal.transactionline",
       "JOIN account a ON a.id = tal.account",
       "WHERE t.posting = 'T'",
       "  AND tal.accountingbook = " + parseInt(book, 10),
       "  AND t.postingperiod IN (" + parseInt(currId, 10) + ", " + parseInt(priorId, 10) + ")",
-      "GROUP BY t.subsidiary, BUILTIN.DF(t.subsidiary), a.id, a.fullname, a.accttype"
+      "GROUP BY tl.subsidiary, BUILTIN.DF(tl.subsidiary), a.id, a.fullname, a.accttype"
     ].join('\n');
   }
 
@@ -62,10 +67,10 @@ define([], function () {
    */
   function driversSql(accountIds, periodIds, book, subsidiaryIds) {
     var sub = (subsidiaryIds && subsidiaryIds.length)
-      ? "\n  AND t.subsidiary IN (" + ints(subsidiaryIds) + ")" : '';
+      ? "\n  AND tl.subsidiary IN (" + ints(subsidiaryIds) + ")" : '';
     return [
       "SELECT a.id AS account_id, a.fullname AS account, t.postingperiod AS period_id,",
-      "       t.subsidiary AS subsidiary_id, BUILTIN.DF(t.subsidiary) AS subsidiary,",
+      "       tl.subsidiary AS subsidiary_id, BUILTIN.DF(tl.subsidiary) AS subsidiary,",
       "       t.type AS txn_type, t.tranid AS tranid, BUILTIN.DF(t.entity) AS entity,",
       "       COUNT(*) AS lines, ROUND(SUM(tal.amount), 2) AS amount,",
       "       t.memo AS txn_memo, tl.memo AS line_memo,",
@@ -78,7 +83,7 @@ define([], function () {
       "  AND tal.accountingbook = " + parseInt(book, 10),
       "  AND tal.account IN (" + ints(accountIds) + ")",
       "  AND t.postingperiod IN (" + ints(periodIds) + ")" + sub,
-      "GROUP BY a.id, a.fullname, t.postingperiod, t.subsidiary, BUILTIN.DF(t.subsidiary),",
+      "GROUP BY a.id, a.fullname, t.postingperiod, tl.subsidiary, BUILTIN.DF(tl.subsidiary),",
       "         t.type, t.tranid, BUILTIN.DF(t.entity), t.memo, tl.memo,",
       "         BUILTIN.DF(tl.department), BUILTIN.DF(tl.class)",
       "ORDER BY a.id, t.postingperiod, ABS(SUM(tal.amount)) DESC"
@@ -88,18 +93,19 @@ define([], function () {
   /** Trailing history: one pre-aggregated row per (account, period[, entity]). Feeds trend_facts. */
   function historySql(accountIds, periodIds, book, subsidiaryIds) {
     var sub = (subsidiaryIds && subsidiaryIds.length)
-      ? "\n  AND t.subsidiary IN (" + ints(subsidiaryIds) + ")" : '';
+      ? "\n  AND tl.subsidiary IN (" + ints(subsidiaryIds) + ")" : '';
     return [
-      "SELECT a.id AS account_id, t.postingperiod AS period_id, t.subsidiary AS subsidiary_id,",
+      "SELECT a.id AS account_id, t.postingperiod AS period_id, tl.subsidiary AS subsidiary_id,",
       "       BUILTIN.DF(t.entity) AS entity, COUNT(*) AS lines, ROUND(SUM(tal.amount), 2) AS amount",
       "FROM transactionaccountingline tal",
       "JOIN transaction t ON t.id = tal.transaction",
+      "JOIN transactionline tl ON tl.transaction = tal.transaction AND tl.id = tal.transactionline",
       "JOIN account a ON a.id = tal.account",
       "WHERE t.posting = 'T'",
       "  AND tal.accountingbook = " + parseInt(book, 10),
       "  AND tal.account IN (" + ints(accountIds) + ")",
       "  AND t.postingperiod IN (" + ints(periodIds) + ")" + sub,
-      "GROUP BY a.id, t.postingperiod, t.subsidiary, BUILTIN.DF(t.entity)"
+      "GROUP BY a.id, t.postingperiod, tl.subsidiary, BUILTIN.DF(t.entity)"
     ].join('\n');
   }
 

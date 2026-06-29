@@ -87,11 +87,11 @@ define([], function () {
     H.push('<hr style="border:none;border-top:1px solid #ddd;margin:14px 0">');
     H.push('<p style="color:#666;font-size:12px;font-style:italic;margin:0">Calculation and checks are deterministic ' +
       '(NetSuite SuiteQL + number/provenance eval, all in SuiteScript). The embedded N/llm model only turns the flagged ' +
-      'transactions into plain-language explanations. AI drafts, code checks, human approves. DRAFT for review - not yet sent to finance.</p>');
+      'transactions into plain-language explanations. AI drafts, code checks, human approves. For review before circulation.</p>');
     H.push('</div>');
 
     return {
-      subject: meta.title + ' - ' + meta.subsidiary + ' - ' + meta.current_period + ' (DRAFT for review)',
+      subject: meta.title + ' - ' + meta.subsidiary + ' - ' + meta.current_period,
       body: H.join('\n')
     };
   }
