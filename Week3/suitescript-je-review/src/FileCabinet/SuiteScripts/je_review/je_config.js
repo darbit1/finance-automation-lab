@@ -30,10 +30,10 @@ define([], function () {
     // categories here are the normalised ones.
     SENSITIVE_TYPES: { control: 1, bank: 1, equity: 1 },
 
-    // Run the approver-based rule (sod_breach). Set FALSE for accounts with no JE approval workflow:
-    // there the "no independent approver" branch has no signal and would flag every entry (see README
-    // "Known limits"). TRUE (default) is correct wherever journals are actually approved in-platform.
-    ENABLE_APPROVER_RULES: true,
+    // Run the approver-based rule (sod_breach). FALSE here: this account runs no JE approval workflow,
+    // so the "no independent approver" branch has no signal and would flag every entry (see README
+    // "Known limits"). Set TRUE for accounts where journals are actually approved in-platform.
+    ENABLE_APPROVER_RULES: false,
 
     // --- Field wiring (account-specific — see README "Known limits") --------
     // Column supplying the approver identity. Out of the box NetSuite has no single "who approved"
