@@ -38,7 +38,8 @@ you build it**. That leaves three build approaches:
    inside NetSuite**: a Scheduled SuiteScript runs the rules + guard in code and calls the embedded
    **`N/llm`** model (OCI Generative AI — Cohere Command R / R+) for the reviewer + challenger notes,
    then emails/stores the worklist. → [suitescript-je-review/](suitescript-je-review/) (SDF project;
-   **19 off-platform Jest tests**).
+   **19 off-platform Jest tests**). **Deployed and run live in a sandbox** — its Jun 2026 output matches
+   the hybrid **1:1** (see the field note).
 
 ## Capability comparison
 
@@ -127,17 +128,28 @@ can tune the threshold with no developer, and see it in the UI/dashboards. The s
 SuiteQL.** They aren't exclusive — the connector even exposes `ns_runSavedSearch` — you'd just trade
 git/tests/portability for in-UI ownership.
 
-## Live field note (a NetSuite sandbox, real data via MCP)
+## Live field note — both implementations, same real ledger
 
-Run over **Apr 2026, 16 real manual journals** (all Q1 CIT accruals) pulled read-only through the MCP
-SuiteQL tool, deterministic rules + guard in code: **0 escalate · 7 monitor · 9 logged · 0 guard
-failures.** Real signals that survived: `over_threshold` on the three large accruals, `near_duplicate`
-on two same-account/same-amount pairs (the challenger correctly asks whether either is a split). One
-tuning lesson the live data taught: the connected account runs **no JE approval workflow**, so the `sod_breach`
-"no approver" branch flagged every entry until switched off — now a config toggle
-(`ENABLE_APPROVER_RULES`). This is the honest value of the deterministic layer: it stays quiet on
-routine tax accruals and surfaces only the handful worth a glance — and every tweak is a versioned,
-testable change, not a prompt re-roll.
+**Hybrid (1), Apr 2026 — the flagging exercise.** Run over **16 real manual journals** (all Q1 CIT
+accruals) pulled read-only through the MCP SuiteQL tool, deterministic rules + guard in code: **0
+escalate · 7 monitor · 9 logged · 0 guard failures.** Real signals that survived: `over_threshold` on
+the three large accruals, `near_duplicate` on two same-account/same-amount pairs (the challenger
+correctly asks whether either is a split). One tuning lesson the live data taught: the connected account
+runs **no JE approval workflow**, so the `sod_breach` "no approver" branch flagged every entry until
+switched off — now a config toggle (`ENABLE_APPROVER_RULES`).
+
+**Parity (1 vs 3), Jun 2026 — the headline.** The SuiteScript build was **deployed to the sandbox via
+SDF** and run; on the same period it produced **byte-identical output** to the external hybrid: both
+assessed the same **2** journals (a payroll accrual + an immaterial reclass), both **0 escalate · 0
+monitor · 2 logged · 0 guard failures**. Same period, same journals, same scores, same dispositions —
+from two entirely different runtimes (external Claude API vs in-platform OCI `N/llm`). That is the claim
+made concrete: **the control is the same; only the writer and the address differ.** (Because Jun is a
+clean month, no entry reached the grey zone, so the OCI model itself wasn't exercised on this run — the
+*deterministic* parity is what's proven end-to-end.)
+
+The through-line: it's the honest value of the deterministic layer — it stays quiet on routine tax
+accruals and surfaces only the handful worth a glance, identically across both runtimes, and every tweak
+is a versioned, testable change rather than a prompt re-roll.
 
 ## When each one wins
 

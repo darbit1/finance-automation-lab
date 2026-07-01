@@ -154,7 +154,9 @@ number-trace guard as SuiteScript, the reviewer note and the challenger critique
 — no external orchestrator, no data leaving the platform. It keeps the same right-size rule and the
 same maker-checker seam (a `missed_risk` challenge still forces escalation; an invented figure is
 still rejected in code). The rules + guard are covered by **19 off-platform Jest tests** with the same
-"all planted anomalies caught, 0 false positives" headline. This is the in-platform sibling of the
+"all planted anomalies caught, 0 false positives" headline. **Deployed and run live in a sandbox**, it
+produced **byte-identical** output to the Python hybrid on the same period (Jun 2026: 2 journals, 0
+escalate, 0 guard failures) — *same control, different runtime.* This is the in-platform sibling of the
 Python build above, exactly as [Week1/suitescript-flux/](Week1/suitescript-flux/) is for Build 1.
 See [Week3/suitescript-je-review/](Week3/suitescript-je-review/) (and its
 [DEPLOY.md](Week3/suitescript-je-review/DEPLOY.md)).

@@ -12,10 +12,12 @@ maker-checker seam: a second agent challenges the first, and a deterministic gua
 the model invents. See the [repo README](../../README.md#build-2--manual-je-anomaly-reviewer-detective-control--maker-checker)
 for the build-vs-buy case.
 
-> **Status: builds + unit-tests green off-platform (19 Jest tests).** The SuiteQL register wiring
+> **Status: deployed and run live in a sandbox.** Deployed via SDF; a Jun 2026 run assessed the 2 real
+> manual journals in the period and returned **0 escalate · 0 monitor · 2 logged · 0 guard failures** —
+> **byte-identical to the external Python + Claude hybrid** on the same ledger (same period, journals,
+> scores, dispositions). 19 off-platform Jest tests stay green. The SuiteQL register wiring
 > (preparer/approver/support fields) has account-specific assumptions called out under *Known limits*;
-> validate those on your account before the first live run, exactly as the flux build's DEPLOY.md
-> walks through.
+> for accounts with no JE approval workflow, set `ENABLE_APPROVER_RULES: false` (done here).
 
 ## What's here
 
