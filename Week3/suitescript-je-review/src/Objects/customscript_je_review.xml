@@ -1,0 +1,13 @@
+<scheduledscript scriptid="customscript_je_review">
+  <name>Manual JE Anomaly Review (SuiteScript + N/llm)</name>
+  <notifyowner>T</notifyowner>
+  <scriptfile>[/SuiteScripts/je_review/je_scheduled.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_je_review">
+      <title>Manual JE Anomaly Review - Monthly</title>
+      <isdeployed>T</isdeployed>
+      <loglevel>AUDIT</loglevel>
+      <status>NOTSCHEDULED</status>
+    </scriptdeployment>
+  </scriptdeployments>
+</scheduledscript>

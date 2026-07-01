@@ -20,6 +20,7 @@ synthetic_tb.csv
 
 # --- Local working set (dev-only: demo, reference engine, tests; kept off GitHub) ---
 Week1/working/
+Week3/working/
 
 # --- SuiteCloud (SDF) local dev artifacts (auth-id binding; machine-specific) ---
 Week1/suitescript-flux/project.json

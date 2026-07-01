@@ -84,3 +84,82 @@ Analytics Warehouse.)
 A fuller **four-way comparison** — this build vs full-AI vs embedded EPM vs embedded EPM-AI, with a
 capability matrix and cost-benefit — is in
 [Week1/flux_approaches_comparison.md](Week1/flux_approaches_comparison.md).
+
+---
+
+## Build 2 — Manual JE anomaly reviewer (detective control + maker-checker)
+
+An AI **detective control** over a manual journal-entry register: deterministic rules flag the
+entries a controller should actually look at, an AI reviewer writes the note on the ambiguous ones,
+and a **second AI agent challenges it** — segregation of duties, for agents. No LLM ever computes a
+figure or decides a disposition.
+
+### The right-size split
+
+| Step | Owner | Why |
+|------|-------|-----|
+| Flag anomalies (10 rules) + risk score + tier | **Code** ([Week3/je_rules.py](Week3/je_rules.py)) | "Posted on a Saturday?", "preparer == approver?", "duplicate amount?" are exact tests — versioned + unit-tested, never sent to an LLM |
+| Decide who must review (disposition) | **Code** | High-severity / score ≥ 5 auto-escalates regardless of the AI |
+| Judge the grey-zone (medium) cases + write a reviewer note | **AI — reviewer** (Haiku) | Plain-English judgement is the one thing rules can't own |
+| Challenge the reviewer (false positives + missed risk) | **AI — challenger** (Sonnet) | Four-eyes; can only make an entry *more* scrutinised, never less |
+| Verify every figure in the note traces to the entry | **Code (the guard)** | The audit seam — an invented number is rejected |
+| Assemble the reviewer worklist | **Code** ([Week3/je_report.py](Week3/je_report.py)) | Numbers never come from the AI |
+
+### Components
+
+| File | Layer | Touches a number? |
+|------|-------|-------------------|
+| [Week3/je_rules.py](Week3/je_rules.py) | 10 pure, tested rules + deterministic risk score/tier | yes (in the rules) |
+| [Week3/je_review.py](Week3/je_review.py) | reviewer + challenger subagents (`template`/`llm` modes) + the number-trace guard | guard checks only |
+| [Week3/je_report.py](Week3/je_report.py) | deterministic worklist assembler | formats only |
+| [Week3/skills/je-reviewer/SKILL.md](Week3/skills/je-reviewer/SKILL.md) | the reusable **Agent Skill** (progressive disclosure → [rules_reference.md](Week3/skills/je-reviewer/rules_reference.md)) | — |
+
+The synthetic register (~10 planted anomalies), the offline demo, and the test suites live in a
+local `Week3/working/` dev set (not tracked here).
+
+### The rules
+
+`over_threshold · round_thousand · off_hours (weekend/holiday/after-hours) · weak_description ·
+no_support · sensitive_account (manual JE to a control/bank/equity account) · entry_post_gap ·
+closed_period · sod_breach (preparer = approver / unapproved) · near_duplicate`. Thresholds are
+policy, set on `RuleContext`, not buried in a formula. See
+[rules_reference.md](Week3/skills/je-reviewer/rules_reference.md).
+
+### The maker-checker seam
+
+The reviewer AI drafts a note only from the entry's own facts + the fired flags; a deterministic
+**number-trace guard** then rejects any figure it cannot trace back to the entry. The challenger AI
+re-reads the same facts and the note, looking specifically for over-flagging and — the harder task —
+*missed* risk. **Code has the last word:** a `missed_risk` challenge forces escalation; the AI can
+never wave a high-severity flag through.
+
+### Tests
+
+Two plain-assert suites in the local `Week3/working/` dev set: `test_je_rules.py` (12) and
+`test_je_review.py` (9) — **21 tests**. The headline check: all **10 planted anomalies caught, 0
+false positives** on the clean rows.
+
+### Build vs buy
+
+NetSuite 2026.1 improved JE **approval workflow** (Suite Approvals — next-approver, aging,
+lock/reopen), but that is a *preventive* approval control, not an **AI detective review** for
+anomalies. *Verdict:* complementary — this build closes the documented manual-JE control gap with a
+worklist a human works top-down, plus a maker-checker decision trail an auditor can follow.
+
+### NetSuite-native build (SuiteScript + `N/llm`)
+
+The same detective control, ported to run **entirely inside NetSuite**: the rule engine and the
+number-trace guard as SuiteScript, the reviewer note and the challenger critique from the embedded
+**`N/llm`** model (OCI Generative AI), emailed to a reviewer as a DRAFT and saved to the File Cabinet
+— no external orchestrator, no data leaving the platform. It keeps the same right-size rule and the
+same maker-checker seam (a `missed_risk` challenge still forces escalation; an invented figure is
+still rejected in code). The rules + guard are covered by **19 off-platform Jest tests** with the same
+"all planted anomalies caught, 0 false positives" headline. This is the in-platform sibling of the
+Python build above, exactly as [Week1/suitescript-flux/](Week1/suitescript-flux/) is for Build 1.
+See [Week3/suitescript-je-review/](Week3/suitescript-je-review/) (and its
+[DEPLOY.md](Week3/suitescript-je-review/DEPLOY.md)).
+
+A fuller **approaches comparison** — hybrid (this build) vs full-AI vs embedded SuiteScript `N/llm`,
+why there is **no native NetSuite detective control** for this, an honest read on *when Full AI is
+actually better*, and the SuiteQL-vs-saved-search retrieval choice — is in
+[Week3/je_approaches_comparison.md](Week3/je_approaches_comparison.md).
