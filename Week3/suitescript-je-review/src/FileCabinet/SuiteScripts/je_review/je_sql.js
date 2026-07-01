@@ -90,8 +90,22 @@ define([], function () {
     ].join('\n');
   }
 
+  /** Count of manual journals per period, so the orchestrator can skip empty (e.g. current) months. */
+  function journalCountsSql(periodIds, book) {
+    return [
+      "SELECT t.postingperiod AS period_id, COUNT(DISTINCT t.id) AS cnt",
+      "FROM transaction t",
+      "JOIN transactionaccountingline tal ON tal.transaction = t.id",
+      "WHERE t.type = 'Journal' AND t.posting = 'T'",
+      "  AND tal.accountingbook = " + parseInt(book, 10),
+      "  AND t.postingperiod IN (" + ints(periodIds) + ")",
+      "GROUP BY t.postingperiod"
+    ].join('\n');
+  }
+
   return {
     recentPeriodsSql: recentPeriodsSql,
+    journalCountsSql: journalCountsSql,
     journalHeaderSql: journalHeaderSql,
     journalLinesSql: journalLinesSql
   };

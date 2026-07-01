@@ -60,10 +60,19 @@ function (query, email, file, runtime, log, CONFIG, sql, rules, ai, guard, repor
     var c = cfg();
     var runAt = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
 
-    // 1. Periods: newest first, with the native closed flag. Take the most recent `months` in scope.
+    // 1. Periods: newest first, with the native closed flag.
     var periods = runQuery(sql.recentPeriodsSql());
     if (!periods.length) { log.error('JE review', 'Could not resolve accounting periods'); return; }
-    var scope = periods.slice(0, Math.max(1, c.months));
+
+    // Anchor the scope on the most recent period that ACTUALLY HAS manual journals, so an empty
+    // current month (nothing posted yet) doesn't yield an empty report. Then take `months` from there.
+    var counts = runQuery(sql.journalCountsSql(periods.map(function (p) { return rules_toInt(p.id); }), c.book));
+    var hasJournals = {};
+    counts.forEach(function (r) { if (rules_toInt(r.cnt) > 0) hasJournals[String(r.period_id)] = true; });
+    var startIdx = 0;
+    while (startIdx < periods.length && !hasJournals[String(periods[startIdx].id)]) startIdx++;
+    if (startIdx >= periods.length) startIdx = 0;   // no journals anywhere; fall back to newest
+    var scope = periods.slice(startIdx, startIdx + Math.max(1, c.months));
     var scopeIds = scope.map(function (p) { return rules_toInt(p.id); });
     var periodName = {}, closedPeriodIds = {};
     periods.forEach(function (p) {
